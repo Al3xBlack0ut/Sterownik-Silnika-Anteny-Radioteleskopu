@@ -1,9 +1,8 @@
 """
-Radio Telescope Antenna Controller
-Kompletna biblioteka do sterowania silnikiem anteny radioteleskopu
+Biblioteka do sterowania silnikiem anteny radioteleskopu
 
-Autor: System do sterowania anteną
-Wersja: 1.0.0
+Autor: Aleks Czarnecki
+Wersja: 0.1
 """
 
 import serial
