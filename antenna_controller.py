@@ -9,6 +9,7 @@ rzeczywistym oraz kompleksową obsługę błędów i limitów bezpieczeństwa.
 Autor: Aleks Czarnecki
 """
 
+import serial
 import glob
 import logging
 import platform
@@ -19,7 +20,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Tuple, Dict, Any, Callable, List
 
-import serial
 
 # Konfiguracja logowania
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
