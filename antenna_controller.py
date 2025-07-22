@@ -316,7 +316,6 @@ class MotorDriver(ABC):
     @abstractmethod
     def disconnect(self) -> None:
         """Rozłącza się ze sterownikiem"""
-        pass
 
     @abstractmethod
     def move_to_position(self, azimuth_steps: int, elevation_steps: int) -> None:
