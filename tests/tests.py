@@ -9,34 +9,39 @@ Zawiera również testy obciążeniowe i powtarzalności pozycjonowania dla zape
 Autor: Aleks Czarnecki
 """
 
+import os
 import unittest
 import time
 import logging
 import sys
-from datetime import datetime, timedelta
-from typing import List, Tuple, Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from antenna_controller import (
-    AntennaControllerFactory, Position, MotorConfig, AntennaLimits,
-    AntennaState, AntennaError, SafetyError, CommunicationError, PositionError,
-    SPIDMotorDriver, DEFAULT_SPID_PORT
+    AntennaControllerFactory,
+    Position,
+    MotorConfig,
+    AntennaLimits,
+    AntennaState,
+    SafetyError,
+    SPIDMotorDriver,
+    DEFAULT_SPID_PORT,
 )
 
 from astronomic_calculator import (
-    ObserverLocation, AstronomicalCalculator, AstronomicalTracker,
-    AstronomicalObjectType
+    ObserverLocation,
+    AstronomicalCalculator,
+    AstronomicalTracker,
 )
 
 # Konfiguracja logowania
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('hardware_tests.log')
-    ]
+        logging.FileHandler("hardware_tests.log"),
+    ],
 )
 logger = logging.getLogger("hardware_tests")
 
@@ -63,7 +68,7 @@ class AntennaHardwareTests(unittest.TestCase):
             steps_per_revolution=200,
             microsteps=16,
             gear_ratio_azimuth=100.0,
-            gear_ratio_elevation=80.0
+            gear_ratio_elevation=80.0,
         )
 
         # Limity bezpieczeństwa
@@ -71,7 +76,7 @@ class AntennaHardwareTests(unittest.TestCase):
             min_azimuth=0.0,
             max_azimuth=360.0,
             min_elevation=0.0,  # Minimum 5 stopni nad horyzontem
-            max_elevation=85.0  # Maksimum 85 stopni (unikamy zenitu)
+            max_elevation=85.0,  # Maksimum 85 stopni (unikamy zenitu)
         )
 
         # Inicjalizacja kontrolera
@@ -80,7 +85,7 @@ class AntennaHardwareTests(unittest.TestCase):
                 port=self.PORT,
                 baudrate=self.BAUDRATE,
                 motor_config=self.motor_config,
-                limits=self.limits
+                limits=self.limits,
             )
 
             self.controller.initialize()
@@ -91,7 +96,7 @@ class AntennaHardwareTests(unittest.TestCase):
                 latitude=self.OBSERVER_LAT,
                 longitude=self.OBSERVER_LON,
                 elevation=self.OBSERVER_ELEV,
-                name="Test Location"
+                name="Test Location",
             )
             self.calculator = AstronomicalCalculator(self.observer_location)
             self.tracker = AstronomicalTracker(self.calculator)
@@ -104,7 +109,7 @@ class AntennaHardwareTests(unittest.TestCase):
         """Sprzątanie po testach — bezpieczne wyłączenie kontrolera"""
         try:
             # Sprawdzamy, czy kontroler istnieje i jest zainicjalizowany
-            if hasattr(self, 'controller'):
+            if hasattr(self, "controller"):
                 # Powrót do pozycji bezpiecznej
                 try:
                     self.move_to_safe_position()
@@ -130,7 +135,9 @@ class AntennaHardwareTests(unittest.TestCase):
         # Czekaj na zakończenie ruchu
         self.wait_for_movement(timeout=30)
 
-        logger.info(f"Pozycja bezpieczna osiągnięta: {self.controller.current_position}")
+        logger.info(
+            f"Pozycja bezpieczna osiągnięta: {self.controller.current_position}"
+        )
 
     def wait_for_movement(self, timeout=60):
         """Czeka na zakończenie ruchu z timeoutem"""
@@ -138,7 +145,9 @@ class AntennaHardwareTests(unittest.TestCase):
         while self.controller.state == AntennaState.MOVING:
             if time.time() - start_time > timeout:
                 self.controller.stop()
-                raise TimeoutError(f"Przekroczono czas oczekiwania na ruch ({timeout}s)")
+                raise TimeoutError(
+                    f"Przekroczono czas oczekiwania na ruch ({timeout}s)"
+                )
             time.sleep(0.5)
 
     def test_00_reset(self):
@@ -171,7 +180,9 @@ class AntennaHardwareTests(unittest.TestCase):
 
         # Pobierz aktualną pozycję
         position = self.controller.current_position
-        logger.info(f"Aktualna pozycja: Az={position.azimuth:.2f}°, El={position.elevation:.2f}°")
+        logger.info(
+            f"Aktualna pozycja: Az={position.azimuth:.2f}°, El={position.elevation:.2f}°"
+        )
 
         # Sprawdź, czy pozycja jest w sensownych granicach
         self.assertGreaterEqual(position.azimuth, self.limits.min_azimuth)
@@ -187,12 +198,17 @@ class AntennaHardwareTests(unittest.TestCase):
         self.controller.calibrate()
 
         # Czekaj na zakończenie kalibracji
-        while self.controller.state == AntennaState.CALIBRATING or self.controller.state == AntennaState.MOVING:
+        while (
+            self.controller.state == AntennaState.CALIBRATING
+            or self.controller.state == AntennaState.MOVING
+        ):
             time.sleep(0.5)
 
         # Sprawdź, czy pozycja po kalibracji jest bliska (0,0)
         position = self.controller.current_position
-        logger.info(f"Pozycja po kalibracji: Az={position.azimuth:.2f}°, El={position.elevation:.2f}°")
+        logger.info(
+            f"Pozycja po kalibracji: Az={position.azimuth:.2f}°, El={position.elevation:.2f}°"
+        )
 
         # Tolerancja na niedokładność mechaniczną
         self.assertAlmostEqual(position.azimuth, 0.0, delta=1.0)
@@ -208,11 +224,13 @@ class AntennaHardwareTests(unittest.TestCase):
             Position(135.0, 45.0),  # Południowy-wschód, wyżej
             Position(225.0, 30.0),  # Południowy-zachód, średnia wysokość
             Position(315.0, 15.0),  # Północny-zachód, niżej
-            Position(0.0, 10.0)     # Powrót do pozycji bezpiecznej
+            Position(0.0, 10.0),  # Powrót do pozycji bezpiecznej
         ]
 
         for i, pos in enumerate(test_positions):
-            logger.info(f"Ruch {i+1}/{len(test_positions)}: Az={pos.azimuth:.1f}°, El={pos.elevation:.1f}°")
+            logger.info(
+                f"Ruch {i+1}/{len(test_positions)}: Az={pos.azimuth:.1f}°, El={pos.elevation:.1f}°"
+            )
 
             start_time = time.time()
             self.controller.move_to(pos)
@@ -224,7 +242,9 @@ class AntennaHardwareTests(unittest.TestCase):
             current = self.controller.current_position
             move_time = time.time() - start_time
 
-            logger.info(f"Osiągnięto: Az={current.azimuth:.1f}°, El={current.elevation:.1f}° w {move_time:.1f}s")
+            logger.info(
+                f"Osiągnięto: Az={current.azimuth:.1f}°, El={current.elevation:.1f}° w {move_time:.1f}s"
+            )
 
             # Tolerancja pozycji (stopnie)
             tolerance = 1.5
@@ -280,7 +300,7 @@ class AntennaHardwareTests(unittest.TestCase):
 
         try:
             # Ustaw wolniejsze limity dla testów
-            self.limits.max_azimuth_speed = 2.0   # 2 stopnie/s
+            self.limits.max_azimuth_speed = 2.0  # 2 stopnie/s
             self.limits.max_elevation_speed = 1.0  # 1 stopień/s
 
             # Przesuń do pozycji początkowej
@@ -290,7 +310,9 @@ class AntennaHardwareTests(unittest.TestCase):
             # Wykonaj duży ruch i zmierz czas
             target = Position(90.0, 45.0)  # 90° w azymucie i 35° w elewacji
 
-            logger.info(f"Ruch do Az={target.azimuth}°, El={target.elevation}° z ograniczoną prędkością")
+            logger.info(
+                f"Ruch do Az={target.azimuth}°, El={target.elevation}° z ograniczoną prędkością"
+            )
             start_time = time.time()
 
             self.controller.move_to(target)
@@ -303,8 +325,10 @@ class AntennaHardwareTests(unittest.TestCase):
             # Azymut: 90° przy 2°/s = min 45s
             # Elewacja: 35° przy 1°/s = min 35s
             # Powinien dominować dłuższy czas
-            expected_min_time = max(90.0 / self.limits.max_azimuth_speed,
-                                   35.0 / self.limits.max_elevation_speed)
+            expected_min_time = max(
+                90.0 / self.limits.max_azimuth_speed,
+                35.0 / self.limits.max_elevation_speed,
+            )
 
             # Sprawdź, czy ruch nie był zbyt szybki (z pewnym marginesem)
             self.assertGreaterEqual(elapsed, expected_min_time * 0.8)
@@ -320,7 +344,9 @@ class AntennaHardwareTests(unittest.TestCase):
 
         # Ruch do odległej pozycji
         target = Position(180.0, 60.0)
-        logger.info(f"Rozpoczynanie ruchu do Az={target.azimuth}°, El={target.elevation}°")
+        logger.info(
+            f"Rozpoczynanie ruchu do Az={target.azimuth}°, El={target.elevation}°"
+        )
 
         self.controller.move_to(target)
 
@@ -340,14 +366,20 @@ class AntennaHardwareTests(unittest.TestCase):
 
         # Zapisz pozycję zatrzymania
         stop_position = self.controller.current_position
-        logger.info(f"Pozycja zatrzymania: Az={stop_position.azimuth:.1f}°, El={stop_position.elevation:.1f}°")
+        logger.info(
+            f"Pozycja zatrzymania: Az={stop_position.azimuth:.1f}°, El={stop_position.elevation:.1f}°"
+        )
 
         # Poczekaj 3 sekundy i sprawdź, czy pozycja się nie zmieniła
         time.sleep(3.0)
         current_position = self.controller.current_position
 
-        self.assertAlmostEqual(current_position.azimuth, stop_position.azimuth, delta=0.5)
-        self.assertAlmostEqual(current_position.elevation, stop_position.elevation, delta=0.5)
+        self.assertAlmostEqual(
+            current_position.azimuth, stop_position.azimuth, delta=0.5
+        )
+        self.assertAlmostEqual(
+            current_position.elevation, stop_position.elevation, delta=0.5
+        )
 
         logger.info("Awaryjne zatrzymanie działa poprawnie")
 
@@ -357,14 +389,18 @@ class AntennaHardwareTests(unittest.TestCase):
 
         # Test limitu minimalnej elewacji
         min_el_target = Position(90.0, self.limits.min_elevation - 1.0)
-        logger.info(f"Próba ruchu poniżej limitu elewacji: El={min_el_target.elevation:.1f}°")
+        logger.info(
+            f"Próba ruchu poniżej limitu elewacji: El={min_el_target.elevation:.1f}°"
+        )
 
         with self.assertRaises(SafetyError):
             self.controller.move_to(min_el_target)
 
         # Test limitu maksymalnej elewacji
         max_el_target = Position(90.0, self.limits.max_elevation + 1.0)
-        logger.info(f"Próba ruchu powyżej limitu elewacji: El={max_el_target.elevation:.1f}°")
+        logger.info(
+            f"Próba ruchu powyżej limitu elewacji: El={max_el_target.elevation:.1f}°"
+        )
 
         with self.assertRaises(SafetyError):
             self.controller.move_to(max_el_target)
@@ -372,8 +408,12 @@ class AntennaHardwareTests(unittest.TestCase):
         # Dla azymutu zakładamy, że zakres 0-360 jest obsługiwany przez normalizację
         # Test będzie polegał na sprawdzeniu, czy wartość jest prawidłowo zwijana
         try:
-            over_az_target = Position(370.0, 20.0)  # 370° powinno być interpretowane jako 10°
-            logger.info(f"Próba ruchu do Az={over_az_target.azimuth:.1f}° (powinna być znormalizowana)")
+            over_az_target = Position(
+                370.0, 20.0
+            )  # 370° powinno być interpretowane jako 10°
+            logger.info(
+                f"Próba ruchu do Az={over_az_target.azimuth:.1f}° (powinna być znormalizowana)"
+            )
 
             self.controller.move_to(over_az_target)
             self.wait_for_movement()
@@ -388,7 +428,9 @@ class AntennaHardwareTests(unittest.TestCase):
 
         except SafetyError:
             # Jeśli implementacja nie obsługuje normalizacji, test również jest zaliczony
-            logger.info("Wykryto SafetyError dla azymutu poza zakresem - również poprawne zachowanie")
+            logger.info(
+                "Wykryto SafetyError dla azymutu poza zakresem - również poprawne zachowanie"
+            )
 
     def test_08_sun_tracking(self):
         """Test śledzenia Słońca"""
@@ -398,7 +440,9 @@ class AntennaHardwareTests(unittest.TestCase):
         sun_position = self.calculator.get_sun_position()
 
         if not sun_position.is_visible or sun_position.elevation < 10.0:
-            logger.warning(f"Słońce nie jest wystarczająco wysoko ({sun_position.elevation:.1f}°) - pomijam test")
+            logger.warning(
+                f"Słońce nie jest wystarczająco wysoko ({sun_position.elevation:.1f}°) - pomijam test"
+            )
             self.skipTest("Słońce nie jest wystarczająco wysoko")
 
         # Przygotowanie funkcji śledzenia
@@ -407,7 +451,7 @@ class AntennaHardwareTests(unittest.TestCase):
         # Śledź Słońce przez 5 minut
         logger.info("Rozpoczynanie śledzenia Słońca przez 5 minut")
         tracking_duration = 5 * 60  # 5 minut
-        update_interval = 30        # Aktualizacja co 30 sekund
+        update_interval = 30  # Aktualizacja co 30 sekund
 
         start_time = time.time()
         end_time = start_time + tracking_duration
@@ -420,7 +464,9 @@ class AntennaHardwareTests(unittest.TestCase):
                 logger.warning("Słońce poza zasięgiem - przerywam śledzenie")
                 break
 
-            logger.info(f"Pozycja Słońca: Az={sun_pos.azimuth:.2f}°, El={sun_pos.elevation:.2f}°")
+            logger.info(
+                f"Pozycja Słońca: Az={sun_pos.azimuth:.2f}°, El={sun_pos.elevation:.2f}°"
+            )
 
             try:
                 # Przesuń antenę do pozycji Słońca
@@ -440,11 +486,17 @@ class AntennaHardwareTests(unittest.TestCase):
                     if az_error > 180:
                         az_error = 360 - az_error
 
-                    logger.info(f"Dokładność śledzenia: dAz={az_error:.2f}°, dEl={el_error:.2f}°")
+                    logger.info(
+                        f"Dokładność śledzenia: dAz={az_error:.2f}°, dEl={el_error:.2f}°"
+                    )
 
                     # Sprawdzenie z dużą tolerancją (ze względu na powolny ruch Słońca)
-                    self.assertLessEqual(az_error, 3.0, "Zbyt duży błąd śledzenia azymutu")
-                    self.assertLessEqual(el_error, 3.0, "Zbyt duży błąd śledzenia elewacji")
+                    self.assertLessEqual(
+                        az_error, 3.0, "Zbyt duży błąd śledzenia azymutu"
+                    )
+                    self.assertLessEqual(
+                        el_error, 3.0, "Zbyt duży błąd śledzenia elewacji"
+                    )
 
                 # Pauza przed następną aktualizacją
                 remaining = min(update_interval, int(end_time) - int(time.time()))
@@ -482,7 +534,9 @@ class AntennaHardwareTests(unittest.TestCase):
 
             # Zapisujemy osiągniętą pozycję
             current = self.controller.current_position
-            logger.info(f"Osiągnięto: Az={current.azimuth:.3f}°, El={current.elevation:.3f}°")
+            logger.info(
+                f"Osiągnięto: Az={current.azimuth:.3f}°, El={current.elevation:.3f}°"
+            )
 
             achieved_positions.append((current.azimuth, current.elevation))
 
@@ -496,11 +550,13 @@ class AntennaHardwareTests(unittest.TestCase):
         az_variance = sum((x - az_mean) ** 2 for x in az_values) / len(az_values)
         el_variance = sum((x - el_mean) ** 2 for x in el_values) / len(el_values)
 
-        az_std_dev = az_variance ** 0.5
-        el_std_dev = el_variance ** 0.5
+        az_std_dev = az_variance**0.5
+        el_std_dev = el_variance**0.5
 
         logger.info(f"Średnia pozycja: Az={az_mean:.3f}°, El={el_mean:.3f}°")
-        logger.info(f"Odchylenie standardowe: Az={az_std_dev:.3f}°, El={el_std_dev:.3f}°")
+        logger.info(
+            f"Odchylenie standardowe: Az={az_std_dev:.3f}°, El={el_std_dev:.3f}°"
+        )
 
         # Sprawdź powtarzalność (powinna być lepsza niż 1°)
         self.assertLess(az_std_dev, 1.0, "Zbyt duża wariancja azymutu")
@@ -526,7 +582,7 @@ class AntennaHardwareTests(unittest.TestCase):
             Position(90.0, 20.0),
             Position(180.0, 30.0),
             Position(270.0, 20.0),
-            Position(0.0, 10.0)
+            Position(0.0, 10.0),
         ]
 
         logger.info(f"Rozpoczęcie {num_cycles} cykli po {len(test_positions)} pozycji")
@@ -537,10 +593,14 @@ class AntennaHardwareTests(unittest.TestCase):
                 logger.info(f"Cykl {cycle+1}/{num_cycles}")
 
                 for i, pos in enumerate(test_positions):
-                    logger.info(f"  Pozycja {i+1}/{len(test_positions)}: Az={pos.azimuth}°, El={pos.elevation}°")
+                    logger.info(
+                        f"  Pozycja {i+1}/{len(test_positions)}: Az={pos.azimuth}°, El={pos.elevation}°"
+                    )
 
                     self.controller.move_to(pos)
-                    self.wait_for_movement(timeout=30)  # Krótszy timeout dla szybszego wykrycia problemów
+                    self.wait_for_movement(
+                        timeout=30
+                    )  # Krótszy timeout dla szybszego wykrycia problemów
 
                     # Krótka pauza między ruchami
                     time.sleep(0.1)
