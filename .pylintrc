@@ -1,0 +1,45 @@
+[MESSAGES CONTROL]
+# Disable specific warnings that you prefer to ignore
+disable=
+    # Formatting warnings you want to keep your style
+    logging-fstring-interpolation,  # W1203 - allows f-strings in logging
+    line-too-long,                  # C0301 - allows longer lines
+    too-many-lines,                 # C0302 - allows longer modules
+    
+    # Import warnings you want to ignore  
+    wrong-import-order,             # C0411 - allows different import order
+    ungrouped-imports,              # C0412 - allows ungrouped imports
+    import-outside-toplevel,        # C0415 - allows conditional imports
+    
+    # Style warnings to ignore
+    superfluous-parens,             # C0325 - allows extra parentheses
+    
+    # Exception handling you want to keep flexible
+    broad-exception-caught,         # W0718 - allows catching Exception
+    raise-missing-from,             # W0707 - allows raise without from
+    
+    # Variable naming in specific contexts
+    redefined-outer-name,           # W0621 - allows parameter names same as outer scope
+    
+    # Method/class design choices you want to keep
+    protected-access,               # W0212 - allows accessing protected members
+    attribute-defined-outside-init, # W0201 - allows attributes defined outside __init__
+    
+    # Spell checker warnings - ignore all spelling issues
+    invalid-name,                   # C0103 - allows non-English names and abbreviations
+    
+    # Disable cSpell integration completely
+    # All "Unknown word" warnings will be ignored
+
+[FORMAT]
+# Allow longer lines since you prefer them
+max-line-length=120
+
+[BASIC]
+# Allow more flexible naming
+good-names=i,j,k,ex,Run,_,x,y,z,az,el,dt,cmd
+
+[DESIGN]
+# Allow more methods/attributes per class for complex controllers
+max-attributes=15
+max-public-methods=30

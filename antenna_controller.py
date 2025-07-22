@@ -3,22 +3,23 @@ Biblioteka do sterowania silnikiem anteny radioteleskopu
 Protokół komunikacji: SPID
 
 Główna biblioteka zawierająca kompletny system sterowania anteną radioteleskopu.
-Obejmuje sterowniki SPID i symulatory, kontroler pozycji, monitorowanie w czasie rzeczywistym
-oraz kompleksową obsługę błędów i limitów bezpieczeństwa.
+Obejmuje sterowniki SPID i symulatory, kontroler pozycji, monitorowanie w czasie
+rzeczywistym oraz kompleksową obsługę błędów i limitów bezpieczeństwa.
 
 Autor: Aleks Czarnecki
 """
 
-import serial
-import time
-import threading
-import logging
 import glob
+import logging
 import platform
+import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any, Callable, List
 from enum import Enum
+from typing import Optional, Tuple, Dict, Any, Callable, List
+
+import serial
 
 # Konfiguracja logowania
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -129,23 +130,20 @@ def get_best_spid_port(preferred_port: Optional[str] = None, baudrate: int = 115
 
 
 class AntennaError(Exception):
+
     """Podstawowy wyjątek dla błędów anteny"""
-    pass
 
 
 class CommunicationError(AntennaError):
-    """Błąd komunikacji z sterownikiem""" 
-    pass
+    """Błąd komunikacji z sterownikiem"""
 
 
 class PositionError(AntennaError):
     """Błąd pozycjonowania anteny"""
-    pass
 
 
 class SafetyError(AntennaError):
     """Błąd bezpieczeństwa - przekrocenie limitów"""
-    pass
 
 
 class AntennaState(Enum):
@@ -311,7 +309,6 @@ class MotorDriver(ABC):
     @abstractmethod
     def connect(self) -> None:
         """Nawiązuje połączenie z sterownikiem"""
-        pass
 
     @abstractmethod
     def disconnect(self) -> None:
@@ -320,22 +317,18 @@ class MotorDriver(ABC):
     @abstractmethod
     def move_to_position(self, azimuth_steps: int, elevation_steps: int) -> None:
         """Przesuwa silniki do pozycji (w krokach)"""
-        pass
 
     @abstractmethod
     def get_position(self) -> Tuple[int, int]:
         """Zwraca aktualną pozycję w krokach (azymut, elewacja)"""
-        pass
 
     @abstractmethod
     def stop(self) -> None:
         """Zatrzymuje wszystkie silniki"""
-        pass
 
     @abstractmethod
     def is_moving(self) -> bool:
         """Sprawdza czy silniki się poruszają"""
-        pass
 
 
 class SPIDMotorDriver(MotorDriver):
