@@ -1,8 +1,8 @@
 # Sterownik Silnika Anteny Radioteleskopu
 
-**Kompletny system sterowania pozycją anteny radioteleskopu z wykorzystaniem protokołu SPID i rotctl**
+Kompletny system sterowania pozycją anteny radioteleskopu z wykorzystaniem protokołu SPID i rotctl
 
-Autor: **Aleks Czarnecki** 
+Autor: **Aleks Czarnecki**
 
 ---
 
@@ -12,14 +12,14 @@ Autor: **Aleks Czarnecki**
 2. [Architektura systemu](#architektura-systemu)  
 3. [Struktura projektu](#struktura-projektu)
 4. [Instalacja i konfiguracja](#instalacja-i-konfiguracja)
-5. [REST API Server](#rest-api-server)
+5. [API REST Server](#api-rest-server)
 6. [Podstawowe użycie](#podstawowe-użycie)
-7. [Protokół SPID i rotctl](#protokół-spid-i-rotctl)
+7. [Protokol SPID i rotctl](#protokol-spid-i-rotctl)
 8. [Kalkulator astronomiczny](#kalkulator-astronomiczny)
 9. [Zarządzanie kalibracją](#zarządzanie-kalibracją)
 10. [System bezpieczeństwa](#system-bezpieczeństwa)
 11. [Przykłady użycia](#przykłady-użycia)
-12. [Rozwiązywanie problemów](#rozwiązywanie-problemów)
+12. [Rozwiązywanie problemów](#rozwiazywanie-problemow)
 
 ---
 
@@ -63,6 +63,7 @@ Autor: **Aleks Czarnecki**
 │     Silnik anteny radioteleskopu     │ ← Fizyczny silnik pozycjonujący
 └──────────────────────────────────────┘
 ```
+
 ## Struktura projektu
 
 ```text
@@ -104,7 +105,6 @@ radioteleskop/
 ### Instalacja rotctl (Hamlib)
 
 **WAŻNE:** rotctl musi być zainstalowany systemowo przed instalacją Python packages!
-
 
 #### Linux
 
@@ -187,7 +187,6 @@ rotctl -m 903 -r /dev/tty.usbserial-A10PDNT7 -s 115200 p
 - Standardowa prędkość: 115200 bps
 - Linux: może wymagać uprawnień: `sudo usermod -a -G dialout $USER`
 
-
 ---
 
 ## API REST Server
@@ -195,6 +194,7 @@ rotctl -m 903 -r /dev/tty.usbserial-A10PDNT7 -s 115200 p
 ### Szybki start
 
 **Linux/macOS:**
+
 ```bash
 # 1. Aktywuj środowisko wirtualne
 source venv/bin/activate
@@ -208,6 +208,7 @@ python main.py
 ```
 
 **Windows:**
+
 ```bash
 # 1. Aktywuj środowisko wirtualne
 venv\Scripts\activate
@@ -292,6 +293,43 @@ if sun_el > 0:  # Słońce nad horyzontem
 controller.disconnect()
 ```
 
+---
+
+## Podstawowe użycie
+
+### Inicjalizacja kontrolera
+
+```python
+from antenna_controller import AntennaController
+
+# Utwórz kontroler anteny
+controller = AntennaController()
+```
+
+### Połączenie ze sprzętem
+
+```python
+# Połączenie z fizycznym kontrolerem SPID
+success = controller.connect("/dev/tty.usbserial-A10PDNT7")
+
+# Lub użyj symulatora do testów
+controller.connect("simulator")
+```
+
+### Podstawowe sterowanie
+
+```python
+# Przesuń antenę do określonej pozycji
+controller.move_to_position(azimuth=180.0, elevation=45.0)
+
+# Sprawdź aktualną pozycję
+position = controller.get_current_position()
+print(f"Azymut: {position.azimuth}°, Elewacja: {position.elevation}°")
+
+# Zatrzymaj ruch anteny
+controller.stop()
+```
+
 ### Zaawansowane funkcje
 
 ```python
@@ -320,6 +358,96 @@ for i in range(10):
     status = controller.get_status()
     print(f"Pozycja: {pos}, Status: {status}")
     time.sleep(1)
+```
+
+---
+
+## Zarządzanie kalibracją
+
+### Kalibracja pozycji północy
+
+```python
+from antenna_controller import AntennaController
+
+controller = AntennaController()
+controller.connect("/dev/tty.usbserial-A10PDNT7")
+
+# Kalibruj pozycję północy (0° azymut)
+controller.calibrate_north()
+```
+
+### Ustawienia offsetu
+
+```python
+from antenna_controller import PositionCalibration
+
+# Definicja kalibracji z offsetami
+calibration = PositionCalibration(
+    azimuth_offset=2.5,     # Korekta azymutu +2.5°
+    elevation_offset=-1.0   # Korekta elewacji -1.0°
+)
+
+# Zastosuj kalibrację
+controller = AntennaController(calibration=calibration)
+```
+
+### Zarządzanie plikami kalibracji
+
+```python
+# Zapisz kalibrację do pliku JSON
+controller.save_calibration("calibrations/antenna_calibration.json")
+
+# Wczytaj kalibrację z pliku
+controller.load_calibration("calibrations/antenna_calibration.json")
+```
+
+---
+
+## System bezpieczeństwa
+
+### Limity mechaniczne
+
+System automatycznie sprawdza limity mechaniczne anteny przed każdym ruchem:
+
+```python
+from antenna_controller import AntennaLimits
+
+# Definicja limitów anteny
+limits = AntennaLimits(
+    min_azimuth=0.0,      # Minimalny azymut
+    max_azimuth=360.0,    # Maksymalny azymut  
+    min_elevation=0.0,    # Minimalna elewacja
+    max_elevation=90.0    # Maksymalna elewacja
+)
+
+controller = AntennaController(limits=limits)
+```
+
+### Awaryjne zatrzymanie
+
+```python
+# Natychmiastowe zatrzymanie anteny
+controller.emergency_stop()
+
+# Sprawdzenie stanu awaryjnego
+if controller.is_emergency_stop_active():
+    print("Antenowa w stanie awaryjnym!")
+    
+# Reset stanu awaryjnego
+controller.reset_emergency_stop()
+```
+
+### Monitoring bezpieczeństwa
+
+```python
+# Sprawdź status bezpieczeństwa
+safety_status = controller.get_safety_status()
+print(f"Status: {safety_status}")
+
+# Sprawdź czy pozycja jest bezpieczna
+is_safe = controller.is_position_safe(azimuth=180.0, elevation=45.0)
+if not is_safe:
+    print("Pozycja poza limitami bezpieczeństwa!")
 ```
 
 ---
@@ -398,7 +526,7 @@ controller.disconnect()
 
 ---
 
-## Protokół SPID
+## Protokol SPID i rotctl
 
 System obsługuje natywnie protokół **SPID MD-01/02/03** przez **rotctl (Hamlib)**:
 
@@ -489,7 +617,7 @@ print(f"Zachód Słońca: {sun_times.get('next_setting')}")
 
 ---
 
-## Rozwiązywanie problemów
+## Rozwiazywanie problemow
 
 ### Częste problemy
 
@@ -513,6 +641,7 @@ winget install hamlib
 #### Problem: "Permission denied" na porcie USB
 
 **Linux (Ubuntu/Debian/CentOS/RHEL/Fedora):**
+
 ```bash
 # Dodaj użytkownika do grupy dialout
 sudo usermod -a -G dialout $USER
@@ -527,6 +656,7 @@ ls -la /dev/ttyUSB* /dev/ttyACM*
 ```
 
 **macOS:**
+
 ```bash
 # Sprawdź uprawnienia portu
 ls -la /dev/tty.usbserial*
@@ -540,6 +670,7 @@ sudo kextload -b com.apple.driver.AppleUSBFTDI
 ```
 
 **Windows:**
+
 ```bash
 # Sprawdź dostępne porty COM w Device Manager
 # Lub w PowerShell:
@@ -622,8 +753,8 @@ print('='*50)
 
 ## Podziękowania
 
-**Autor:** Aleks Czarnecki 
-**Licencja:** MIT License  
+**Autor:** Aleks Czarnecki
+**Licencja:** MIT License
 **Wersja:** 1.32 (2025)
 
 ### Wykorzystane biblioteki
@@ -632,4 +763,3 @@ print('='*50)
 - **[FastAPI](https://fastapi.tiangolo.com/)** — nowoczesny web framework
 - **[PySerial](https://pyserial.readthedocs.io/)** — komunikacja szeregowa
 - **[Hamlib](https://hamlib.github.io/)** — protokoły kontrolerów silników anten
-
