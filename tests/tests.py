@@ -24,7 +24,7 @@ from antenna_controller import (
     AntennaLimits,
     AntennaState,
     SafetyError,
-    SPIDMotorDriver,
+    RotctlMotorDriver,
     DEFAULT_SPID_PORT,
 )
 
@@ -75,8 +75,8 @@ class AntennaHardwareTests(unittest.TestCase):
         self.limits = AntennaLimits(
             min_azimuth=0.0,
             max_azimuth=360.0,
-            min_elevation=0.0,  # Minimum 5 stopni nad horyzontem
-            max_elevation=85.0,  # Maksimum 85 stopni (unikamy zenitu)
+            min_elevation=0.0,
+            max_elevation=57.0,
         )
 
         # Inicjalizacja kontrolera
@@ -139,7 +139,7 @@ class AntennaHardwareTests(unittest.TestCase):
             f"Pozycja bezpieczna osiągnięta: {self.controller.current_position}"
         )
 
-    def wait_for_movement(self, timeout=60):
+    def wait_for_movement(self, timeout=90):
         """Czeka na zakończenie ruchu z timeoutem"""
         start_time = time.time()
         while self.controller.state == AntennaState.MOVING:
@@ -174,8 +174,8 @@ class AntennaHardwareTests(unittest.TestCase):
         self.assertIsNotNone(self.controller)
         self.assertEqual(self.controller.state, AntennaState.IDLE)
 
-        # Sprawdzenie, czy sterownik to rzeczywiście SPIDMotorDriver
-        self.assertIsInstance(self.controller.motor_driver, SPIDMotorDriver)
+        # Sprawdzenie, czy sterownik to rzeczywiście RotctlMotorDriver
+        self.assertIsInstance(self.controller.motor_driver, RotctlMotorDriver)
         self.assertTrue(self.controller.motor_driver.connected)
 
         # Pobierz aktualną pozycję

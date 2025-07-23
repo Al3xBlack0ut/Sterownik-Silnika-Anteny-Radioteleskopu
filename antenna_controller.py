@@ -1,24 +1,26 @@
 """
 Biblioteka do sterowania silnikiem anteny radioteleskopu
-Protokół komunikacji: SPID
+Protokół komunikacji: Hamlib rotctl
 
 Główna biblioteka zawierająca kompletny system sterowania anteną radioteleskopu.
-Obejmuje sterowniki SPID i symulatory, kontroler pozycji, monitorowanie w czasie
+Używa biblioteki Hamlib (rotctl) do komunikacji z kontrolerem SPID MD-01/02/03.
+Obejmuje sterownik rotctl, kontroler pozycji, monitorowanie w czasie
 rzeczywistym oraz kompleksową obsługę błędów i limitów bezpieczeństwa.
 
 Autor: Aleks Czarnecki
 """
 
-import serial
-import glob
 import logging
-import platform
 import threading
 import time
+import json
+import os
+import subprocess
+import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from enum import Enum
-from typing import Optional, Tuple, Dict, Any, Callable, List
+from typing import Optional, Tuple, Dict, Any, Callable
 
 
 # Konfiguracja logowania
@@ -28,109 +30,337 @@ logger = logging.getLogger(__name__)
 # Domyślny port szeregowy dla kontrolera SPID
 DEFAULT_SPID_PORT = "/dev/tty.usbserial-A10PDNT7"
 
+# Domyślna ścieżka do pliku konfiguracji kalibracji
+DEFAULT_CALIBRATION_FILE = "calibrations/antenna_calibration.json"
 
-def auto_detect_spid_ports() -> List[str]:
-    """Automatycznie wykrywa dostępne porty szeregowe dla SPID"""
-    ports = []
-    system = platform.system()
-
-    if system == "Darwin":  # macOS
-        ports.extend(glob.glob("/dev/tty.usbserial*"))
-        ports.extend(glob.glob("/dev/cu.usbserial*"))
-        ports.extend(glob.glob("/dev/tty.usbmodem*"))
-    elif system == "Linux":
-        ports.extend(glob.glob("/dev/ttyUSB*"))
-        ports.extend(glob.glob("/dev/ttyACM*"))
-        ports.extend(glob.glob("/dev/serial/by-id/*"))
-    elif system == "Windows":
-        # Na Windows użyjemy pyserial.tools.list_ports
-        try:
-            import serial.tools.list_ports
-            win_ports = [port.device for port in serial.tools.list_ports.comports()]
-            ports.extend(win_ports)
-        except ImportError:
-            # Fallback dla Windows
-            for i in range(1, 21):
-                ports.append(f"COM{i}")
-
-    return sorted(ports)
+# Model SPID dla rotctl (903 = SPID MD-01/02 ROT2 mode)
+ROTCTL_SPID_MODEL = '903'
 
 
-def find_working_spid_port(baudrate: int = 115200, timeout: float = 0.5) -> Optional[str]:
+def sprawdz_rotctl() -> bool:
+    """Sprawdza czy rotctl jest dostępne w systemie."""
+    try:
+        result = subprocess.run(['rotctl', '--version'], 
+                              capture_output=True, text=True, timeout=5, check=False)
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def ustaw_pozycje_rotctl(port: str, az: float, el: float, speed: int = 115200) -> str:
+    """Ustawia pozycję rotatora za pomocą rotctl (Hamlib)."""
+    komenda = f"P {az % 360:.1f} {el:.1f}\n"
+    
+    proc = subprocess.Popen(
+        ['rotctl', '-m', ROTCTL_SPID_MODEL, '-r', port, '-s', str(speed), '-'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    
+    stdout, stderr = proc.communicate(input=komenda)
+    
+    if proc.returncode != 0:
+        raise RuntimeError(f"Błąd rotctl: {stderr.strip()}")
+    
+    return stdout.strip()
+
+
+def odczytaj_pozycje_rotctl(port: str, speed: int = 115200) -> Tuple[float, float]:
     """
-    Znajduje pierwszy działający port SPID poprzez testowanie połączenia
+    Odczytuje aktualną pozycję rotatora za pomocą rotctl.
+    Zwraca tuple (azymut, elewacja) w stopniach.
     """
-    detected_ports = auto_detect_spid_ports()
-    logger.info(f"Wykryte porty: {detected_ports}")
-
-    for port in detected_ports:
-        try:
-            logger.debug(f"Testowanie portu: {port}")
-
-            # Testuj połączenie z portem
-            ser = serial.Serial(
-                port=port,
-                baudrate=baudrate,
-                bytesize=8,
-                parity='N',
-                stopbits=1,
-                timeout=timeout
-            )
-
-            # Opcjonalnie: wyślij komendę STATUS i sprawdź odpowiedź
+    proc = subprocess.Popen(
+        ['rotctl', '-m', ROTCTL_SPID_MODEL, '-r', port, '-s', str(speed), '-'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    
+    stdout, stderr = proc.communicate(input="p\n")
+    
+    if proc.returncode != 0:
+        raise RuntimeError(f"Błąd rotctl: {stderr.strip()}")
+    
+    # Parsowanie odpowiedzi - usuń echo komendy
+    lines = stdout.strip().split('\n')
+    values = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('p '):
             try:
-                status_cmd = b'\x57' + b'\x00' * 10 + b'\x1F' + b'\x20'
-                ser.write(status_cmd)
-                time.sleep(0.1)
-                response = ser.read(12)
-
-                # Sprawdź czy odpowiedź wygląda jak SPID (zaczyna się od 0x57)
-                if len(response) >= 1 and response[0] == 0x57:
-                    ser.close()
-                    logger.info(f"Znaleziono działający port SPID: {port}")
-                    return port
-
-            except Exception:
-                # Jeśli test SPID nie działa, sprawdź przynajmniej czy port się otwiera
+                values.append(float(line))
+            except ValueError:
+                # Sprawdź czy linia zawiera wartość po "p "
+                if line.startswith('p '):
+                    try:
+                        values.append(float(line[2:]))
+                    except ValueError:
+                        continue
+    
+    if len(values) >= 2:
+        return values[0], values[1]
+    else:
+        # Alternatywne parsowanie - wyciągnij liczby z całego tekstu
+        numbers = re.findall(r'[-+]?\d*\.?\d+', stdout)
+        if len(numbers) >= 2:
+            try:
+                return float(numbers[0]), float(numbers[1])
+            except ValueError:
                 pass
-
-            ser.close()
-            logger.debug(f"Port {port} dostępny (ale nie potwierdził protokołu SPID)")
-
-        except (serial.SerialException, OSError) as e:
-            logger.debug(f"Port {port} niedostępny: {e}")
-            continue
-
-    logger.warning("Nie znaleziono działającego portu SPID")
-    return None
+        
+        raise RuntimeError(f"Niepełna odpowiedź pozycji: {stdout}")
 
 
-def get_best_spid_port(preferred_port: Optional[str] = None, baudrate: int = 115200) -> str:
+def zatrzymaj_rotor_rotctl(port: str, speed: int = 115200) -> str:
+    """Zatrzymuje ruch rotatora za pomocą rotctl."""
+    proc = subprocess.Popen(
+        ['rotctl', '-m', ROTCTL_SPID_MODEL, '-r', port, '-s', str(speed), '-'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    
+    stdout, stderr = proc.communicate(input="S\n")
+    
+    if proc.returncode != 0:
+        raise RuntimeError(f"Błąd rotctl STOP: {stderr.strip()}")
+    
+    return stdout.strip()
+
+
+def get_best_spid_port(preferred_port: Optional[str] = None) -> str:
     """
-    Zwraca najlepszy dostępny port SPID
+    Zwraca najlepszy port dla kontrolera SPID.
+    Sprawdza czy rotctl jest dostępne.
     """
-    # 1. Jeśli podano preferowany port, sprawdź czy działa
+    if not sprawdz_rotctl():
+        raise RuntimeError("rotctl (Hamlib) nie jest dostępne w systemie")
+    
     if preferred_port:
-        try:
-            ser = serial.Serial(preferred_port, baudrate=baudrate, timeout=0.5)
-            ser.close()
-            logger.info(f"Używam podanego portu: {preferred_port}")
-            return preferred_port
-        except (serial.SerialException, OSError):
-            logger.warning(f"Podany port {preferred_port} nie jest dostępny")
-
-    # 2. Spróbuj automatycznie znaleźć działający port
-    auto_port = find_working_spid_port(baudrate)
-    if auto_port:
-        return auto_port
-
-    # 3. Fallback na domyślny port
+        logger.info(f"Używam podanego portu: {preferred_port}")
+        return preferred_port
+    
     logger.info(f"Używam domyślnego portu: {DEFAULT_SPID_PORT}")
     return DEFAULT_SPID_PORT
 
 
-class AntennaError(Exception):
+# =============================================================================
+# FUNKCJE ROTCTL (HAMLIB) - NOWY SPOSÓB KOMUNIKACJI Z SPID
+# =============================================================================
 
+def sprawdz_rotctl_dostepny() -> bool:
+    """Sprawdza czy rotctl (Hamlib) jest dostępne w systemie."""
+    try:
+        result = subprocess.run(['rotctl', '--version'], 
+                              capture_output=True, text=True, timeout=5, check=False)
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def rotctl_ustaw_pozycje(port: str, az: float, el: float, speed: int = 115200, retry_count: int = 2) -> str:
+    """
+    Ustawia pozycję rotatora SPID za pomocą rotctl (Hamlib).
+    
+    Args:
+        port: Port szeregowy (np. '/dev/tty.usbserial-A10PDNT7')
+        az: Azymut w stopniach (0-360)
+        el: Elewacja w stopniach (-90 do +90)
+        speed: Prędkość portu szeregowego
+        retry_count: Liczba ponownych prób w przypadku błędu
+        
+    Returns:
+        Odpowiedź rotctl jako string
+    
+    Raises:
+        RuntimeError: Jeśli komenda się nie powiodła po wszystkich próbach
+    """
+    if not sprawdz_rotctl_dostepny():
+        raise RuntimeError("rotctl (Hamlib) nie jest dostępne w systemie")
+    
+    komenda = f"P {az % 360:.1f} {el:.1f}\n"
+    
+    for attempt in range(retry_count + 1):
+        try:
+            proc = subprocess.Popen(
+                ['rotctl', '-m', '903', '-r', port, '-s', str(speed), '-'],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            stdout, stderr = proc.communicate(input=komenda, timeout=15)
+            
+            if proc.returncode == 0:
+                logger.debug(f"Rotctl ustaw pozycję Az={az:.1f}°, El={el:.1f}° - odpowiedź: {stdout.strip()}")
+                return stdout.strip()
+            else:
+                if attempt < retry_count:
+                    logger.warning(f"Próba {attempt + 1} nieudana, stderr: '{stderr.strip()}', ponawiam...")
+                    time.sleep(1)  # Krótka pauza przed ponowieniem
+                    continue
+                else:
+                    raise RuntimeError(f"Błąd rotctl podczas ustawiania pozycji: {stderr.strip()}")
+                
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            if attempt < retry_count:
+                logger.warning(f"Timeout podczas próby {attempt + 1}, ponawiam...")
+                time.sleep(1)
+                continue
+            else:
+                raise RuntimeError("Timeout podczas komunikacji z rotctl po wszystkich próbach")
+        except Exception as e:
+            if attempt < retry_count:
+                logger.warning(f"Błąd podczas próby {attempt + 1}: {e}, ponawiam...")
+                time.sleep(1)
+                continue
+            else:
+                raise RuntimeError(f"Błąd podczas komunikacji z rotctl: {e}")
+
+
+def rotctl_odczytaj_pozycje(port: str, speed: int = 115200, retry_count: int = 2) -> Tuple[float, float]:
+    """
+    Odczytuje aktualną pozycję rotatora SPID za pomocą rotctl.
+    
+    Args:
+        port: Port szeregowy
+        speed: Prędkość portu szeregowego
+        retry_count: Liczba ponownych prób w przypadku błędu
+        
+    Returns:
+        Tuple (azymut, elewacja) w stopniach
+        
+    Raises:
+        RuntimeError: Jeśli odczyt się nie powiódł po wszystkich próbach
+    """
+    if not sprawdz_rotctl_dostepny():
+        raise RuntimeError("rotctl (Hamlib) nie jest dostępne w systemie")
+    
+    for attempt in range(retry_count + 1):
+        try:
+            proc = subprocess.Popen(
+                ['rotctl', '-m', '903', '-r', port, '-s', str(speed), '-'],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            stdout, stderr = proc.communicate(input="p\n", timeout=15)
+            
+            if proc.returncode == 0:
+                # Parsowanie odpowiedzi rotctl
+                lines = stdout.strip().split('\n')
+                values = []
+                
+                for line in lines:
+                    line = line.strip()
+                    if line and not line.startswith('p '):
+                        try:
+                            values.append(float(line))
+                        except ValueError:
+                            # Sprawdź czy linia zawiera wartość po "p "
+                            if line.startswith('p '):
+                                try:
+                                    values.append(float(line[2:]))
+                                except ValueError:
+                                    continue
+                
+                if len(values) >= 2:
+                    az, el = values[0], values[1]
+                    logger.debug(f"Rotctl odczyt pozycji: Az={az:.1f}°, El={el:.1f}°")
+                    return az, el
+                else:
+                    # Alternatywne parsowanie - wyciągnij liczby z całego tekstu
+                    numbers = re.findall(r'[-+]?\d*\.?\d+', stdout)
+                    if len(numbers) >= 2:
+                        try:
+                            az, el = float(numbers[0]), float(numbers[1])
+                            logger.debug(f"Rotctl odczyt pozycji (alt): Az={az:.1f}°, El={el:.1f}°")
+                            return az, el
+                        except ValueError:
+                            pass
+                    
+                    if attempt < retry_count:
+                        logger.warning(f"Niepełna odpowiedź podczas próby {attempt + 1}: {stdout}, ponawiam...")
+                        time.sleep(0.5)
+                        continue
+                    else:
+                        raise RuntimeError(f"Niepełna odpowiedź pozycji rotctl: {stdout}")
+            else:
+                if attempt < retry_count:
+                    logger.warning(f"Błąd rotctl podczas próby {attempt + 1}: {stderr.strip()}, ponawiam...")
+                    time.sleep(0.5)
+                    continue
+                else:
+                    raise RuntimeError(f"Błąd rotctl podczas odczytu pozycji: {stderr.strip()}")
+                
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            if attempt < retry_count:
+                logger.warning(f"Timeout podczas odczytu pozycji, próba {attempt + 1}, ponawiam...")
+                time.sleep(0.5)
+                continue
+            else:
+                raise RuntimeError("Timeout podczas odczytu pozycji z rotctl po wszystkich próbach")
+        except Exception as e:
+            if attempt < retry_count:
+                logger.warning(f"Błąd podczas odczytu pozycji, próba {attempt + 1}: {e}, ponawiam...")
+                time.sleep(0.5)
+                continue
+            else:
+                raise RuntimeError(f"Błąd podczas odczytu pozycji z rotctl: {e}")
+
+
+def rotctl_zatrzymaj_rotor(port: str, speed: int = 115200) -> str:
+    """
+    Zatrzymuje ruch rotatora za pomocą rotctl.
+    
+    Args:
+        port: Port szeregowy
+        speed: Prędkość portu szeregowego
+        
+    Returns:
+        Odpowiedź rotctl jako string
+        
+    Raises:
+        RuntimeError: Jeśli komenda się nie powiodła
+    """
+    if not sprawdz_rotctl_dostepny():
+        raise RuntimeError("rotctl (Hamlib) nie jest dostępne w systemie")
+    
+    try:
+        proc = subprocess.Popen(
+            ['rotctl', '-m', '903', '-r', port, '-s', str(speed), '-'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        stdout, stderr = proc.communicate(input="S\n", timeout=10)
+        
+        if proc.returncode != 0:
+            raise RuntimeError(f"Błąd rotctl podczas zatrzymywania: {stderr.strip()}")
+        
+        logger.info("Rotor zatrzymany za pomocą rotctl")
+        return stdout.strip()
+        
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise RuntimeError("Timeout podczas zatrzymywania rotora przez rotctl")
+    except Exception as e:
+        raise RuntimeError(f"Błąd podczas zatrzymywania rotora przez rotctl: {e}")
+
+
+class AntennaError(Exception):
     """Podstawowy wyjątek dla błędów anteny"""
 
 
@@ -182,17 +412,24 @@ class AntennaLimits:
 
 @dataclass
 class PositionCalibration:
-    """Kalibracja pozycji anteny"""
-    azimuth_offset: float = 0.0      # Offset dla azymutu w stopniach (korekta północy)
-    azimuth_inverted: bool = False   # Czy oś azymutu jest odwrócona (True = odwrócony kierunek)
+    """Kalibracja pozycji anteny z limitami bezpieczeństwa"""
+    azimuth_inverted: bool = False   # Czy oś azymutu jest odwrócona (True = odwrócony kierunek, 0° staje się 180°, 90° staje się 270°)
+    azimuth_offset: float = 0.0       # Dodatkowy offset dla azymutu w stopniach
     elevation_inverted: bool = False  # Czy oś elewacji jest odwrócona (True = 0° góra, 90° dół)
     elevation_offset: float = 0.0    # Dodatkowy offset dla elewacji w stopniach
+    
+    # Limity bezpieczeństwa
+    min_azimuth: float = 0.0         # Minimalny azimut w stopniach
+    max_azimuth: float = 360.0       # Maksymalny azimut w stopniach
+    min_elevation: float = 0.0       # Minimalna elewacja w stopniach
+    max_elevation: float = 90.0      # Maksymalna elewacja w stopniach
+    max_azimuth_speed: float = 5.0   # Maksymalna prędkość azymutu w stopniach/s
+    max_elevation_speed: float = 3.0 # Maksymalna prędkość elewacji w stopniach/s
 
     def apply_calibration(self, position: Position) -> Position:
         """Aplikuje kalibrację do pozycji"""
         # Aplikuj odwrócenie azymutu
         if self.azimuth_inverted:
-            # Odwróć oś azymutu: 0° staje się 180°, 90° staje się 270°, itd.
             calibrated_azimuth = (360.0 - position.azimuth) % 360
         else:
             calibrated_azimuth = position.azimuth
@@ -202,7 +439,6 @@ class PositionCalibration:
 
         # Aplikuj kalibrację elewacji
         if self.elevation_inverted:
-            # Odwróć oś elewacji: 0° staje się 90°, 90° staje się 0°
             calibrated_elevation = 90.0 - position.elevation
         else:
             calibrated_elevation = position.elevation
@@ -211,7 +447,7 @@ class PositionCalibration:
         calibrated_elevation += self.elevation_offset
 
         # Ogranicz elewację do sensownego zakresu
-        calibrated_elevation = max(-90.0, min(90.0, calibrated_elevation))
+        calibrated_elevation = max(0.0, min(90.0, calibrated_elevation))
 
         return Position(calibrated_azimuth, calibrated_elevation)
 
@@ -235,6 +471,114 @@ class PositionCalibration:
         raw_elevation = max(-90.0, min(90.0, raw_elevation))
 
         return Position(raw_azimuth, raw_elevation)
+
+    def get_antenna_limits(self) -> 'AntennaLimits':
+        """Zwraca limity anteny na podstawie ustawień kalibracji"""
+        return AntennaLimits(
+            min_azimuth=self.min_azimuth,
+            max_azimuth=self.max_azimuth,
+            min_elevation=self.min_elevation,
+            max_elevation=self.max_elevation,
+            max_azimuth_speed=self.max_azimuth_speed,
+            max_elevation_speed=self.max_elevation_speed
+        )
+
+    def save_to_file(self, filepath: str = DEFAULT_CALIBRATION_FILE) -> None:
+        """Zapisuje kalibrację i limity do pliku JSON"""
+        try:
+            # Utwórz folder jeśli nie istnieje
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            
+            calibration_data = {
+                'azimuth_inverted': self.azimuth_inverted,
+                'azimuth_offset': self.azimuth_offset,
+                'elevation_inverted': self.elevation_inverted,
+                'elevation_offset': self.elevation_offset,
+                'min_azimuth': self.min_azimuth,
+                'max_azimuth': self.max_azimuth,
+                'min_elevation': self.min_elevation,
+                'max_elevation': self.max_elevation,
+                'max_azimuth_speed': self.max_azimuth_speed,
+                'max_elevation_speed': self.max_elevation_speed,
+                'created_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'version': '2.0'
+            }
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(calibration_data, f, indent=4, ensure_ascii=False)
+            
+            logger.info(f"Kalibracja z limitami zapisana do pliku: {filepath}")
+            
+        except Exception as e:
+            logger.error(f"Błąd podczas zapisywania kalibracji: {e}")
+            raise AntennaError(f"Nie można zapisać kalibracji do pliku {filepath}: {e}")
+
+    @classmethod
+    def load_from_file(cls, filepath: str = DEFAULT_CALIBRATION_FILE) -> 'PositionCalibration':
+        """Wczytuje kalibrację i limity z pliku JSON"""
+        try:
+            if not os.path.exists(filepath):
+                logger.warning(f"Plik kalibracji {filepath} nie istnieje, używam domyślnych wartości")
+                return cls()  # Zwróć domyślną kalibrację
+            
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Walidacja danych - podstawowe pola kalibracji
+            required_fields = ['azimuth_inverted', 'azimuth_offset', 'elevation_inverted', 'elevation_offset']
+            for field in required_fields:
+                if field not in data:
+                    logger.warning(f"Brak pola '{field}' w pliku kalibracji, używam wartości domyślnej")
+            
+            calibration = cls(
+                azimuth_inverted=data.get('azimuth_inverted', False),
+                azimuth_offset=float(data.get('azimuth_offset', 0.0)),
+                elevation_inverted=data.get('elevation_inverted', False),
+                elevation_offset=float(data.get('elevation_offset', 0.0)),
+                min_azimuth=float(data.get('min_azimuth', 0.0)),
+                max_azimuth=float(data.get('max_azimuth', 360.0)),
+                min_elevation=float(data.get('min_elevation', 0.0)),
+                max_elevation=float(data.get('max_elevation', 90.0)),
+                max_azimuth_speed=float(data.get('max_azimuth_speed', 5.0)),
+                max_elevation_speed=float(data.get('max_elevation_speed', 3.0))
+            )
+            
+            logger.info(f"Kalibracja wczytana z pliku: {filepath}")
+            logger.info(f"Parametry kalibracji: az_inv={calibration.azimuth_inverted}, "
+                       f"az_off={calibration.azimuth_offset:.2f}°, "
+                       f"el_inv={calibration.elevation_inverted}, "
+                       f"el_off={calibration.elevation_offset:.2f}°")
+            logger.info(f"Limity: az({calibration.min_azimuth}°-{calibration.max_azimuth}°), "
+                       f"el({calibration.min_elevation}°-{calibration.max_elevation}°)")
+            
+            return calibration
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Błąd parsowania JSON w pliku {filepath}: {e}")
+            raise AntennaError(f"Nieprawidłowy format pliku kalibracji: {e}")
+        except Exception as e:
+            logger.error(f"Błąd podczas wczytywania kalibracji: {e}")
+            raise AntennaError(f"Nie można wczytać kalibracji z pliku {filepath}: {e}")
+
+    def export_to_dict(self) -> Dict[str, Any]:
+        """Eksportuje kalibrację do słownika"""
+        return asdict(self)
+
+    @classmethod
+    def import_from_dict(cls, data: Dict[str, Any]) -> 'PositionCalibration':
+        """Importuje kalibrację ze słownika"""
+        return cls(
+            azimuth_inverted=data.get('azimuth_inverted', False),
+            azimuth_offset=float(data.get('azimuth_offset', 0.0)),
+            elevation_inverted=data.get('elevation_inverted', False),
+            elevation_offset=float(data.get('elevation_offset', 0.0)),
+            min_azimuth=float(data.get('min_azimuth', 0.0)),
+            max_azimuth=float(data.get('max_azimuth', 360.0)),
+            min_elevation=float(data.get('min_elevation', 0.0)),
+            max_elevation=float(data.get('max_elevation', 90.0)),
+            max_azimuth_speed=float(data.get('max_azimuth_speed', 5.0)),
+            max_elevation_speed=float(data.get('max_elevation_speed', 3.0))
+        )
 
 
 class MotorConfig:
@@ -315,12 +659,12 @@ class MotorDriver(ABC):
         """Rozłącza się ze sterownikiem"""
 
     @abstractmethod
-    def move_to_position(self, azimuth_steps: int, elevation_steps: int) -> None:
-        """Przesuwa silniki do pozycji (w krokach)"""
+    def move_to_position(self, azimuth: float, elevation: float) -> None:
+        """Przesuwa anteny do pozycji w stopniach"""
 
     @abstractmethod
-    def get_position(self) -> Tuple[int, int]:
-        """Zwraca aktualną pozycję w krokach (azymut, elewacja)"""
+    def get_position(self) -> Tuple[float, float]:
+        """Zwraca aktualną pozycję w stopniach"""
 
     @abstractmethod
     def stop(self) -> None:
@@ -331,13 +675,12 @@ class MotorDriver(ABC):
         """Sprawdza czy silniki się poruszają"""
 
 
-class SPIDMotorDriver(MotorDriver):
-    """Sterownik silnika komunikujący się przez protokół SPID"""
+class RotctlMotorDriver(MotorDriver):
+    """Sterownik silnika komunikujący się przez rotctl (Hamlib) z protokołem SPID"""
 
     def __init__(self, port: str, baudrate: int = 115200):
         self.port = port
         self.baudrate = baudrate
-        self.serial_connection: Optional[serial.Serial] = None
         self.connected = False
         self.current_azimuth = 0.0
         self.current_elevation = 0.0
@@ -346,264 +689,129 @@ class SPIDMotorDriver(MotorDriver):
         self.is_moving_flag = False
 
     def connect(self) -> None:
-        """Nawiązuje połączenie z kontrolerem SPID"""
+        """Sprawdza dostępność rotctl i portu"""
         try:
-            self.serial_connection = serial.Serial(
-                port=self.port,
-                baudrate=self.baudrate,
-                bytesize=8,
-                parity='N',
-                stopbits=1,
-                timeout=1
-            )
-            time.sleep(0.5)  # Pauza po otwarciu portu
+            if not sprawdz_rotctl():
+                raise CommunicationError("rotctl (Hamlib) nie jest dostępne w systemie")
+            
+            # Test połączenia - spróbuj odczytać pozycję
+            self.current_azimuth, self.current_elevation = rotctl_odczytaj_pozycje(self.port, self.baudrate)
             self.connected = True
-            logger.info(f"Połączono z kontrolerem SPID na porcie {self.port} (baudrate: {self.baudrate})")
+            logger.info(f"Połączono z kontrolerem SPID przez rotctl na porcie {self.port} (baudrate: {self.baudrate})")
+            logger.info(f"Aktualna pozycja: Az={self.current_azimuth:.1f}°, El={self.current_elevation:.1f}°")
 
-            # Pobierz aktualną pozycję po połączeniu
-            self._update_position()
-        except serial.SerialException as e:
-            raise CommunicationError(f"Nie można połączyć się z portem {self.port}: {e}")
+        except Exception as e:
+            logger.error(f"Błąd połączenia z SPID przez rotctl: {e}")
+            raise CommunicationError(f"Nie można nawiązać połączenia przez rotctl: {e}")
 
     def disconnect(self) -> None:
-        """Rozłącza połączenie"""
-        if self.serial_connection and self.serial_connection.is_open:
-            self.serial_connection.close()
+        """Rozłącza połączenie - rotctl nie wymaga jawnego rozłączania"""
         self.connected = False
-        logger.info("Rozłączono ze sterownikiem")
+        logger.info("Rozłączono z kontrolerem SPID (rotctl)")
 
-    def _send_spid_command(self, cmd: bytes) -> bytes:
-        """Wysyła komendę SPID i odbiera odpowiedź"""
-        if not self.connected or not self.serial_connection:
-            raise CommunicationError("Brak połączenia z kontrolerem SPID")
-
-        try:
-            # Wyczyść bufory
-            self.serial_connection.reset_input_buffer()
-            self.serial_connection.reset_output_buffer()
-
-            # Wyślij komendę
-            self.serial_connection.write(cmd)
-            logger.debug(f"TX SPID: {cmd.hex().upper()}")
-
-            time.sleep(0.1)  # Krótka pauza
-
-            # Odbierz odpowiedź (oczekiwana 12-bajtowa odpowiedź)
-            response = self.serial_connection.read(12)
-            logger.debug(f"RX SPID: {response.hex().upper()} ({len(response)} bajtów)")
-
-            return response
-        except Exception as e:
-            raise CommunicationError(f"Błąd komunikacji SPID: {e}")
-
-    def _decode_spid_response(self, response: bytes) -> dict:
-        """Dekoduje odpowiedź z kontrolera SPID i transluje hex na czytelny format"""
-        if len(response) < 12:
-            logger.warning(f"Niepełna odpowiedź SPID: {len(response)} bajtów - {response.hex().upper()}")
-            return {'error': f'Niepełna odpowiedź: {len(response)} bajtów', 'raw_hex': response.hex().upper()}
+    def get_position(self) -> Tuple[float, float]:
+        """Odczytuje aktualną pozycję anteny w stopniach"""
+        if not self.connected:
+            raise CommunicationError("Sterownik rotctl nie jest połączony")
 
         try:
-            # Struktura odpowiedzi SPID (12 bajtów)
-            result = {
-                'raw_hex': response.hex().upper(),
-                'start_byte': f'0x{response[0]:02X}',        # 0x57 = 'W' - znacznik początku
-                'azimuth_data': response[1:5],               # 4 bajty danych azymutu
-                'separator1': f'0x{response[5]:02X}',        # 0x00 - separator
-                'elevation_data': response[6:10],            # 4 bajty danych elewacji
-                'separator2': f'0x{response[10]:02X}',       # 0x00 - separator lub kod statusu
-                'end_byte': f'0x{response[11]:02X}'          # Znacznik końca
-            }
-
-            # Dekodowanie pozycji azymutu i elewacji z ASCII
-            try:
-                azimuth_str = result['azimuth_data'].decode('ascii', errors='ignore')
-                elevation_str = result['elevation_data'].decode('ascii', errors='ignore')
-
-                # Sprawdź czy dane są liczbami
-                if azimuth_str.isdigit() and elevation_str.isdigit():
-                    # Konwersja na wartości liczbowe (dzielenie przez 10 dla precyzji dziesiętnej)
-                    result['azimuth_degrees'] = float(azimuth_str) / 10.0
-                    result['elevation_degrees'] = float(elevation_str) / 10.0
-                else:
-                    logger.debug(f"Dane pozycji nie są liczbowe: Az='{azimuth_str}', El='{elevation_str}'")
-                    result['azimuth_degrees'] = 0.0
-                    result['elevation_degrees'] = 0.0
-
-            except (UnicodeDecodeError, ValueError) as e:
-                logger.error(f"Błąd dekodowania pozycji z odpowiedzi SPID: {e}")
-                result['azimuth_degrees'] = 0.0
-                result['elevation_degrees'] = 0.0
-
-            # Dodatkowe informacje o statusie na podstawie bajtów końcowych
-            result['status_info'] = self._decode_status_bytes(response[10], response[11])
-            result['command_type'] = self._identify_command_type(response[10])
-
-            logger.debug(f"Dekodowana odpowiedź SPID: {result['status_info']}")
-            if 'azimuth_degrees' in result and 'elevation_degrees' in result:
-                logger.debug(f"Pozycja: Az={result['azimuth_degrees']:.1f}°, El={result['elevation_degrees']:.1f}°")
-
-            return result
+            self.current_azimuth, self.current_elevation = rotctl_odczytaj_pozycje(self.port, self.baudrate)
+            return self.current_azimuth, self.current_elevation
 
         except Exception as e:
-            logger.error(f"Błąd dekodowania odpowiedzi SPID: {e}")
-            return {'raw_hex': response.hex().upper(), 'error': str(e)}
+            logger.error(f"Błąd odczytu pozycji przez rotctl: {e}")
+            raise CommunicationError(f"Nie można odczytać pozycji przez rotctl: {e}")
 
-    def _decode_status_bytes(self, byte1: int, byte2: int) -> str:
-        """Dekoduje bajty statusu SPID na czytelny opis"""
-        status_info = []
+    def move_to_position(self, azimuth: float, elevation: float) -> None:
+        """Przesuwa antenę do zadanej pozycji w stopniach"""
+        if not self.connected:
+            raise CommunicationError("Sterownik rotctl nie jest połączony")
 
-        # Dekodowanie pierwszego bajtu (typ komendy/status)
-        command_types = {
-            0x00: "Separator/Data",
-            0x0F: "STOP Command Response",
-            0x1F: "STATUS Query Response",
-            0x2F: "MOVE Command Response"
-        }
+        # Walidacja zakresu
+        if not (0 <= azimuth <= 360):
+            raise PositionError(f"Azymut poza zakresem: {azimuth}° (oczekiwano 0-360°)")
+        if not (-90 <= elevation <= 90):
+            raise PositionError(f"Elewacja poza zakresem: {elevation}° (oczekiwano -90-90°)")
 
-        status_info.append(command_types.get(byte1, f"Unknown Command: 0x{byte1:02X}"))
-
-        # Dekodowanie drugiego bajtu (znacznik końca/status)
-        end_markers = {
-            0x20: "End Marker OK",
-            0x0D: "Carriage Return",
-            0x0A: "Line Feed",
-            0x00: "NULL Terminator"
-        }
-
-        status_info.append(end_markers.get(byte2, f"Unknown End Marker: 0x{byte2:02X}"))
-
-        return " | ".join(status_info)
-
-    def _identify_command_type(self, command_byte: int) -> str:
-        """Identyfikuje typ komendy na podstawie bajtu"""
-        command_map = {
-            0x0F: "STOP",
-            0x1F: "STATUS",
-            0x2F: "MOVE",
-            0x00: "DATA"
-        }
-        return command_map.get(command_byte, "UNKNOWN")
-
-    def move_to_position(self, azimuth_steps: int, elevation_steps: int) -> None:
-        """Przesuwa anteny do pozycji w krokach (konwertowane na stopnie dla SPID)"""
-        # Konwersja kroków na stopnie - dostosuj współczynnik zgodnie z konfiguracją
-        azimuth_degrees = azimuth_steps / 100.0
-        elevation_degrees = elevation_steps / 100.0
-
-        self.move_to_degrees(azimuth_degrees, elevation_degrees)
-
-    def move_to_degrees(self, azimuth: float, elevation: float) -> None:
-        """Przesuwa anteny do pozycji w stopniach"""
         try:
-            # Ograniczenia bezpieczeństwa
-            azimuth = max(0, min(360, azimuth))
-            elevation = max(0, min(90, elevation))
-
-            # Formatowanie pozycji do 4 cyfr (zgodnie z protokołem SPID)
-            # Mnożenie przez 10 dla precyzji dziesiętnej
-            az_str = f"{int(azimuth * 10):04d}"
-            el_str = f"{int(elevation * 10):04d}"
-
-            # Budowanie komendy SPID zgodnie z protokołem
-            cmd = (
-                b'\x57' +                    # Start byte (0x57 = 'W')
-                az_str.encode('ascii') +     # Azimuth (4 cyfry ASCII)
-                b'\x00' +                   # Separator
-                el_str.encode('ascii') +     # Elevation (4 cyfry ASCII)
-                b'\x00' +                   # Separator
-                b'\x2F' +                   # Move command marker
-                b'\x20'                     # End marker
-            )
-
-            logger.info(f"SPID: Ruch do pozycji Az={azimuth:.1f}°, El={elevation:.1f}°")
-            logger.debug(f"SPID Move Command: {cmd.hex().upper()}")
-
-            # Wyślij komendę
-            response = self._send_spid_command(cmd)
-
-            # Dekoduj odpowiedź
-            decoded = self._decode_spid_response(response)
-
-            # Ustaw flagi ruchu
             self.target_azimuth = azimuth
             self.target_elevation = elevation
             self.is_moving_flag = True
 
-            logger.info(f"SPID: Komenda ruchu wysłana pomyślnie. Odpowiedź: {decoded.get('raw_hex', 'Brak')}")
+            logger.info(f"Rotctl: Ustawianie pozycji Az={azimuth:.1f}°, El={elevation:.1f}°")
+            
+            # Dodatkowy delay przed wysłaniem komendy
+            time.sleep(0.2)
+            
+            response = rotctl_ustaw_pozycje(self.port, azimuth, elevation, self.baudrate)
+            
+            logger.info(f"Rotctl: Komenda wysłana. Odpowiedź: {response}")
 
         except Exception as e:
-            raise CommunicationError(f"Błąd podczas ruchu SPID: {e}")
-
-    def get_position(self) -> Tuple[int, int]:
-        """Zwraca aktualną pozycję w krokach"""
-        self._update_position()
-        # Konwersja stopni na kroki
-        azimuth_steps = int(self.current_azimuth * 100)
-        elevation_steps = int(self.current_elevation * 100)
-        return azimuth_steps, elevation_steps
-
-    def _update_position(self) -> None:
-        """Aktualizuje aktualną pozycję z kontrolera za pomocą komendy STATUS"""
-        try:
-            # Komenda STATUS zgodnie z protokołem SPID
-            status_cmd = b'\x57' + b'\x00' * 10 + b'\x1F' + b'\x20'
-
-            logger.debug("SPID: Zapytanie o status pozycji")
-            response = self._send_spid_command(status_cmd)
-            decoded = self._decode_spid_response(response)
-
-            if decoded and 'azimuth_degrees' in decoded:
-                self.current_azimuth = decoded['azimuth_degrees']
-                self.current_elevation = decoded['elevation_degrees']
-
-                logger.debug(f"SPID: Aktualna pozycja - Az={self.current_azimuth:.1f}°, El={self.current_elevation:.1f}°")
-
-                # Sprawdź czy ruch został zakończony
-                if self.is_moving_flag:
-                    az_diff = abs(self.current_azimuth - self.target_azimuth)
-                    el_diff = abs(self.current_elevation - self.target_elevation)
-
-                    if az_diff < 1.0 and el_diff < 1.0:  # Tolerancja 1 stopień
-                        self.is_moving_flag = False
-                        logger.info("SPID: Ruch anteny zakończony")
-
-        except Exception as e:
-            logger.warning(f"Nie można zaktualizować pozycji SPID: {e}")
+            self.is_moving_flag = False
+            logger.error(f"Błąd podczas ruchu przez rotctl: {e}")
+            raise CommunicationError(f"Nie można przesunąć anteny przez rotctl: {e}")
 
     def stop(self) -> None:
         """Zatrzymuje ruch anteny"""
+        if not self.connected:
+            raise CommunicationError("Sterownik rotctl nie jest połączony")
+
         try:
-            # Komenda STOP zgodnie z protokołem SPID
-            stop_cmd = b'\x57' + b'\x00' * 10 + b'\x0F' + b'\x20'
-
-            logger.info("SPID: Wysyłanie komendy STOP")
-            response = self._send_spid_command(stop_cmd)
-
-            # Dekoduj odpowiedź
-            decoded = self._decode_spid_response(response)
-
+            logger.info("Rotctl: Zatrzymywanie ruchu anteny")
+            response = rotctl_zatrzymaj_rotor(self.port, self.baudrate)
             self.is_moving_flag = False
-            logger.info(f"SPID: Zatrzymano ruch anteny. Odpowiedź: {decoded.get('raw_hex', 'Brak')}")
+            logger.info(f"Rotctl: Ruch zatrzymany. Odpowiedź: {response}")
 
         except Exception as e:
-            logger.error(f"Błąd podczas zatrzymywania SPID: {e}")
-            raise CommunicationError(f"Nie można zatrzymać anteny: {e}")
+            logger.error(f"Błąd podczas zatrzymywania przez rotctl: {e}")
+            raise CommunicationError(f"Nie można zatrzymać anteny przez rotctl: {e}")
 
     def is_moving(self) -> bool:
-        """Sprawdza czy antena się porusza"""
-        self._update_position()
-        return self.is_moving_flag
+        """
+        Sprawdza czy antena się porusza przez porównanie aktualnej i docelowej pozycji.
+        
+        Nota: rotctl nie zapewnia bezpośredniego sprawdzenia statusu ruchu,
+        więc sprawdzamy czy pozycja jest bliska docelowej.
+        """
+        if not self.is_moving_flag:
+            return False
+
+        try:
+            current_az, current_el = self.get_position()
+            
+            # Tolerancja pozycji (1 stopień)
+            az_diff = abs(current_az - self.target_azimuth)
+            el_diff = abs(current_el - self.target_elevation)
+            
+            # Uwzględnij przejście przez 0°/360° dla azymutu
+            if az_diff > 180:
+                az_diff = 360 - az_diff
+            
+            is_at_target = az_diff < 1.0 and el_diff < 1.0
+            
+            if is_at_target:
+                self.is_moving_flag = False
+                logger.info(f"Rotctl: Pozycja docelowa osiągnięta Az={current_az:.1f}°, El={current_el:.1f}°")
+            
+            return not is_at_target
+
+        except Exception as e:
+            logger.warning(f"Błąd sprawdzenia ruchu przez rotctl: {e}")
+            # W razie błędu zakładamy że ruch się zakończył
+            self.is_moving_flag = False
+            return False
 
 
 class SimulatedMotorDriver(MotorDriver):
-    """Symulator sterownika silnika do testów"""
+    """Symulator sterownika silnika do testów - operuje bezpośrednio na stopniach"""
 
-    def __init__(self, simulation_speed: float = 1000.0):
-        self.simulation_speed = simulation_speed  # kroki/s
-        self.current_azimuth_steps = 0
-        self.current_elevation_steps = 0
-        self.target_azimuth_steps = 0
-        self.target_elevation_steps = 0
+    def __init__(self, simulation_speed: float = 10.0):
+        self.simulation_speed = simulation_speed  # stopnie/s
+        self.current_azimuth = 0.0  # stopnie
+        self.current_elevation = 0.0  # stopnie (horyzont)
+        self.target_azimuth = 0.0
+        self.target_elevation = 0.0
         self.connected = False
         self.is_moving_flag = False
         self.last_move_time = time.time()
@@ -618,54 +826,54 @@ class SimulatedMotorDriver(MotorDriver):
         self.connected = False
         logger.info("Rozłączono z symulatorem sterownika")
 
-    def move_to_position(self, azimuth_steps: int, elevation_steps: int) -> None:
-        """Symuluje ruch do pozycji"""
+    def move_to_position(self, azimuth: float, elevation: float) -> None:
+        """Symuluje ruch do pozycji w stopniach"""
         if not self.connected:
             raise CommunicationError("Symulator nie jest połączony")
 
-        self.target_azimuth_steps = azimuth_steps
-        self.target_elevation_steps = elevation_steps
+        self.target_azimuth = azimuth
+        self.target_elevation = elevation
         self.is_moving_flag = True
         self.last_move_time = time.time()
 
-        logger.info(f"Symulator: Ruch do pozycji Az={azimuth_steps} kroków, El={elevation_steps} kroków")
+        logger.info(f"Symulator: Ruch do pozycji Az={azimuth}°, El={elevation}°")
 
-    def get_position(self) -> Tuple[int, int]:
-        """Zwraca aktualną pozycję z symulacją ruchu"""
+    def get_position(self) -> Tuple[float, float]:
+        """Zwraca aktualną pozycję w stopniach z symulacją ruchu"""
         if not self.connected:
             raise CommunicationError("Symulator nie jest połączony")
 
         if self.is_moving_flag:
             self._simulate_movement()
 
-        return self.current_azimuth_steps, self.current_elevation_steps
+        return self.current_azimuth, self.current_elevation
 
     def _simulate_movement(self) -> None:
-        """Symuluje płynny ruch anteny"""
+        """Symuluje płynny ruch anteny w stopniach"""
         current_time = time.time()
         dt = current_time - self.last_move_time
         self.last_move_time = current_time
 
-        # Oblicz maksymalny ruch w tym kroku czasowym
-        max_move = int(self.simulation_speed * dt)
+        # Oblicz maksymalny ruch w tym kroku czasowym (stopnie)
+        max_move = self.simulation_speed * dt
 
         # Ruch azymutu
-        az_diff = self.target_azimuth_steps - self.current_azimuth_steps
+        az_diff = self.target_azimuth - self.current_azimuth
         if abs(az_diff) <= max_move:
-            self.current_azimuth_steps = self.target_azimuth_steps
+            self.current_azimuth = self.target_azimuth
         else:
-            self.current_azimuth_steps += max_move if az_diff > 0 else -max_move
+            self.current_azimuth += max_move if az_diff > 0 else -max_move
 
         # Ruch elewacji
-        el_diff = self.target_elevation_steps - self.current_elevation_steps
+        el_diff = self.target_elevation - self.current_elevation
         if abs(el_diff) <= max_move:
-            self.current_elevation_steps = self.target_elevation_steps
+            self.current_elevation = self.target_elevation
         else:
-            self.current_elevation_steps += max_move if el_diff > 0 else -max_move
+            self.current_elevation += max_move if el_diff > 0 else -max_move
 
         # Sprawdź czy osiągnięto cel
-        if (self.current_azimuth_steps == self.target_azimuth_steps and
-            self.current_elevation_steps == self.target_elevation_steps):
+        if (abs(self.current_azimuth - self.target_azimuth) < 0.1 and
+            abs(self.current_elevation - self.target_elevation) < 0.1):
             self.is_moving_flag = False
             logger.debug("Symulator: Ruch zakończony")
 
@@ -673,8 +881,8 @@ class SimulatedMotorDriver(MotorDriver):
         """Symuluje zatrzymanie ruchu"""
         self.is_moving_flag = False
         # Ustaw cele na aktualną pozycję
-        self.target_azimuth_steps = self.current_azimuth_steps
-        self.target_elevation_steps = self.current_elevation_steps
+        self.target_azimuth = self.current_azimuth
+        self.target_elevation = self.current_elevation
         logger.info("Symulator: Ruch zatrzymany")
 
     def is_moving(self) -> bool:
@@ -688,13 +896,27 @@ class AntennaController:
     """Główny kontroler anteny radioteleskopu"""
 
     def __init__(self, motor_driver: MotorDriver, motor_config: MotorConfig,
-                 limits: AntennaLimits, update_callback: Optional[Callable] = None,
-                 position_calibration: Optional[PositionCalibration] = None):
+                 limits: Optional[AntennaLimits] = None, update_callback: Optional[Callable] = None,
+                 position_calibration: Optional[PositionCalibration] = None,
+                 calibration_file: str = DEFAULT_CALIBRATION_FILE):
         self.motor_driver = motor_driver
         self.motor_config = motor_config
-        self.limits = limits
         self.update_callback = update_callback
-        self.position_calibration = position_calibration or PositionCalibration()
+        self.calibration_file = calibration_file
+        
+        # Wczytaj kalibrację z pliku lub użyj podanej
+        if position_calibration is not None:
+            self.position_calibration = position_calibration
+        else:
+            self.position_calibration = PositionCalibration.load_from_file(self.calibration_file)
+        
+        # Ustaw limity - używaj limitów z kalibracji, jeśli nie podano innych
+        if limits is not None:
+            self.limits = limits
+            logger.info("Używam podanych limitów bezpieczeństwa")
+        else:
+            self.limits = self.position_calibration.get_antenna_limits()
+            logger.info("Używam limitów bezpieczeństwa z pliku kalibracji")
 
         self.state = AntennaState.IDLE
         self.current_position = Position(0.0, 0.0)
@@ -739,10 +961,8 @@ class AntennaController:
 
         while not self._stop_monitoring.is_set():
             try:
-                az_steps, el_steps = self.motor_driver.get_position()
-                azimuth = az_steps / self.motor_config.steps_per_degree_azimuth
-                elevation = el_steps / self.motor_config.steps_per_degree_elevation
-
+                # Wszystkie sterowniki teraz zwracają bezpośrednio stopnie
+                azimuth, elevation = self.motor_driver.get_position()
                 self.current_position = Position(azimuth, elevation)
 
                 # Sprawdź czy ruch się zakończył
@@ -792,14 +1012,13 @@ class AntennaController:
         # Waliduj skalibrowaną pozycję
         self._validate_position(calibrated_position)
 
-        # Przelicz stopnie na kroki
-        az_steps = int(calibrated_position.azimuth * self.motor_config.steps_per_degree_azimuth)
-        el_steps = int(calibrated_position.elevation * self.motor_config.steps_per_degree_elevation)
-
         try:
             self.target_position = position  # Zapisz oryginalną pozycję (bez kalibracji)
             self.state = AntennaState.MOVING
-            self.motor_driver.move_to_position(az_steps, el_steps)
+            
+            # Wszystkie sterowniki teraz przyjmują stopnie
+            self.motor_driver.move_to_position(calibrated_position.azimuth, calibrated_position.elevation)
+                
             logger.info(f"Rozpoczęto ruch do pozycji: {position} (skalibrowana: {calibrated_position})")
         except Exception as e:
             self.state = AntennaState.ERROR
@@ -819,15 +1038,99 @@ class AntennaController:
             # Zwróć surową pozycję z sensora
             return self.current_position
 
-    def set_position_calibration(self, calibration: PositionCalibration) -> None:
-        """Ustawia kalibrację pozycji"""
+    def set_position_calibration(self, calibration: PositionCalibration, save_to_file: bool = True, 
+                                update_limits: bool = True) -> None:
+        """
+        Ustawia kalibrację pozycji
+        
+        Args:
+            calibration: Nowa kalibracja pozycji
+            save_to_file: Czy zapisać kalibrację do pliku (domyślnie True)
+            update_limits: Czy zaktualizować limity na podstawie kalibracji (domyślnie True)
+        """
         self.position_calibration = calibration
+        
+        # Zaktualizuj limity na podstawie kalibracji jeśli wymagane
+        if update_limits:
+            self.limits = calibration.get_antenna_limits()
+            logger.info("Limity bezpieczeństwa zaktualizowane na podstawie kalibracji")
+        
+        if save_to_file:
+            try:
+                calibration.save_to_file(self.calibration_file)
+                logger.info("Kalibracja została automatycznie zapisana do pliku")
+            except Exception as e:
+                logger.warning(f"Nie udało się zapisać kalibracji do pliku: {e}")
+        
         logger.info(f"Ustawiono kalibrację pozycji: offset_az={calibration.azimuth_offset}°, "
                    f"inverted_az={calibration.azimuth_inverted}, "
                    f"inverted_el={calibration.elevation_inverted}, offset_el={calibration.elevation_offset}°")
+        logger.info(f"Limity: az({calibration.min_azimuth}°-{calibration.max_azimuth}°), "
+                   f"el({calibration.min_elevation}°-{calibration.max_elevation}°)")
 
-    def calibrate_azimuth_reference(self, current_azimuth: float = None, invert_azimuth: bool = False) -> None:
-        """ Kalibruje referencję azymutu """
+    def save_calibration(self, filepath: Optional[str] = None) -> None:
+        """
+        Zapisuje aktualną kalibrację do pliku
+        
+        Args:
+            filepath: Ścieżka do pliku (jeśli None, użyje domyślnej)
+        """
+        file_to_use = filepath or self.calibration_file
+        self.position_calibration.save_to_file(file_to_use)
+        logger.info(f"Kalibracja zapisana do {file_to_use}")
+
+    def load_calibration(self, filepath: Optional[str] = None, update_limits: bool = True) -> None:
+        """
+        Wczytuje kalibrację z pliku
+        
+        Args:
+            filepath: Ścieżka do pliku (jeśli None, użyje domyślnej)
+            update_limits: Czy zaktualizować limity na podstawie kalibracji (domyślnie True)
+        """
+        file_to_use = filepath or self.calibration_file
+        self.position_calibration = PositionCalibration.load_from_file(file_to_use)
+        
+        # Zaktualizuj limity na podstawie wczytanej kalibracji
+        if update_limits:
+            self.limits = self.position_calibration.get_antenna_limits()
+            logger.info("Limity bezpieczeństwa zaktualizowane na podstawie wczytanej kalibracji")
+        
+        logger.info(f"Kalibracja wczytana z {file_to_use}")
+
+    def reset_calibration(self, save_to_file: bool = True, update_limits: bool = True) -> None:
+        """
+        Resetuje kalibrację do wartości domyślnych
+        
+        Args:
+            save_to_file: Czy zapisać zresetowaną kalibrację do pliku
+            update_limits: Czy zaktualizować limity na podstawie domyślnej kalibracji
+        """
+        self.position_calibration = PositionCalibration()
+        
+        # Zaktualizuj limity na podstawie domyślnej kalibracji
+        if update_limits:
+            self.limits = self.position_calibration.get_antenna_limits()
+            logger.info("Limity bezpieczeństwa zresetowane do wartości domyślnych")
+        
+        if save_to_file:
+            try:
+                self.save_calibration()
+                logger.info("Zresetowana kalibracja została zapisana do pliku")
+            except Exception as e:
+                logger.warning(f"Nie udało się zapisać zresetowanej kalibracji: {e}")
+        
+        logger.info("Kalibracja została zresetowana do wartości domyślnych")
+
+    def calibrate_azimuth_reference(self, current_azimuth: float = None, invert_azimuth: bool = False, 
+                                   save_to_file: bool = True) -> None:
+        """ 
+        Kalibruje referencję azymutu
+        
+        Args:
+            current_azimuth: Obecna pozycja azymutu (jeśli None, użyje aktualnej pozycji)
+            invert_azimuth: Czy odwrócić kierunek azymutu
+            save_to_file: Czy zapisać kalibrację do pliku po zmianie
+        """
         if current_azimuth is None:
             current_azimuth = self.current_position.azimuth
 
@@ -835,6 +1138,13 @@ class AntennaController:
         offset = -current_azimuth
         self.position_calibration.azimuth_offset = offset
         self.position_calibration.azimuth_inverted = invert_azimuth
+
+        if save_to_file:
+            try:
+                self.save_calibration()
+                logger.info("Kalibracja azymutu została zapisana do pliku")
+            except Exception as e:
+                logger.warning(f"Nie udało się zapisać kalibracji azymutu: {e}")
 
         logger.info(f"Skalibrowano azymut: offset={offset}°, odwrócona={invert_azimuth}")
 
@@ -881,8 +1191,27 @@ class AntennaController:
             'is_moving': self.motor_driver.is_moving() if hasattr(self.motor_driver, 'is_moving') else False,
             'limits': {
                 'azimuth': (self.limits.min_azimuth, self.limits.max_azimuth),
-                'elevation': (self.limits.min_elevation, self.limits.max_elevation)
-            }
+                'elevation': (self.limits.min_elevation, self.limits.max_elevation),
+                'max_speeds': {
+                    'azimuth': self.limits.max_azimuth_speed,
+                    'elevation': self.limits.max_elevation_speed
+                }
+            },
+            'calibration': {
+                'azimuth_inverted': self.position_calibration.azimuth_inverted,
+                'azimuth_offset': self.position_calibration.azimuth_offset,
+                'elevation_inverted': self.position_calibration.elevation_inverted,
+                'elevation_offset': self.position_calibration.elevation_offset,
+                'limits': {
+                    'min_azimuth': self.position_calibration.min_azimuth,
+                    'max_azimuth': self.position_calibration.max_azimuth,
+                    'min_elevation': self.position_calibration.min_elevation,
+                    'max_elevation': self.position_calibration.max_elevation,
+                    'max_azimuth_speed': self.position_calibration.max_azimuth_speed,
+                    'max_elevation_speed': self.position_calibration.max_elevation_speed
+                }
+            },
+            'calibration_file': self.calibration_file
         }
 
     def reset_error(self) -> None:
@@ -898,7 +1227,8 @@ class AntennaControllerFactory:
     @staticmethod
     def create_spid_controller(port: Optional[str] = None, baudrate: int = 115200,
                                motor_config: Optional[MotorConfig] = None,
-                               limits: Optional[AntennaLimits] = None) -> AntennaController:
+                               limits: Optional[AntennaLimits] = None,
+                               calibration_file: str = DEFAULT_CALIBRATION_FILE) -> AntennaController:
         """
         Tworzy kontroler z sterownikiem SPID
 
@@ -906,32 +1236,42 @@ class AntennaControllerFactory:
             port: Port szeregowy (jeśli None, zostanie automatycznie wykryty)
             baudrate: Prędkość transmisji
             motor_config: Konfiguracja silników
-            limits: Limity mechaniczne
+            limits: Limity mechaniczne (jeśli None, użyje limitów z pliku kalibracji)
+            calibration_file: Ścieżka do pliku kalibracji
         """
         # Jeśli port nie został podany, użyj inteligentnego wyboru
         if port is None:
-            port = get_best_spid_port(baudrate=baudrate)
+            port = get_best_spid_port()
             logger.info(f"Automatycznie wybrano port: {port}")
         else:
             # Sprawdź czy podany port jest dostępny
-            port = get_best_spid_port(preferred_port=port, baudrate=baudrate)
+            port = get_best_spid_port(preferred_port=port)
 
-        motor_driver = SPIDMotorDriver(port, baudrate)
+        motor_driver = RotctlMotorDriver(port, baudrate)
         motor_config = motor_config or MotorConfig()
-        limits = limits or AntennaLimits()
 
-        return AntennaController(motor_driver, motor_config, limits)
+        return AntennaController(motor_driver, motor_config, limits, 
+                               calibration_file=calibration_file)
 
     @staticmethod
     def create_simulator_controller(simulation_speed: float = 1000.0,
                                    motor_config: Optional[MotorConfig] = None,
-                                   limits: Optional[AntennaLimits] = None) -> AntennaController:
-        """Tworzy kontroler z symulatorem"""
+                                   limits: Optional[AntennaLimits] = None,
+                                   calibration_file: str = DEFAULT_CALIBRATION_FILE) -> AntennaController:
+        """
+        Tworzy kontroler z symulatorem
+        
+        Args:
+            simulation_speed: Prędkość symulacji
+            motor_config: Konfiguracja silników
+            limits: Limity mechaniczne (jeśli None, użyje limitów z pliku kalibracji)
+            calibration_file: Ścieżka do pliku kalibracji
+        """
         motor_driver = SimulatedMotorDriver(simulation_speed)
         motor_config = motor_config or MotorConfig()
-        limits = limits or AntennaLimits()
 
-        return AntennaController(motor_driver, motor_config, limits)
+        return AntennaController(motor_driver, motor_config, limits,
+                               calibration_file=calibration_file)
 
 
 # Przykład użycia
@@ -948,20 +1288,14 @@ if __name__ == "__main__":
         gear_ratio_elevation=80.0
     )
 
-    limits = AntennaLimits(
-        min_azimuth=0.0,
-        max_azimuth=360.0,
-        min_elevation=0.0,
-        max_elevation=90.0
-    )
+    # Limity zostaną wczytane z pliku kalibracji automatycznie
 
     # Przykład użycia z SPID (zmień port na właściwy)
     try:
         controller = AntennaControllerFactory.create_spid_controller(
             port="/dev/tty.usbserial-A10PDNT7",  # Twój port
             baudrate=115200,
-            motor_config=motor_config,
-            limits=limits
+            motor_config=motor_config
         )
         controller.initialize()  # Próbuj zainicjalizować
         print("Utworzono kontroler SPID")
@@ -970,8 +1304,7 @@ if __name__ == "__main__":
         print(f"Nie można połączyć z SPID ({e}), przełączam na symulator")
         controller = AntennaControllerFactory.create_simulator_controller(
             simulation_speed=2000.0,
-            motor_config=motor_config,
-            limits=limits
+            motor_config=motor_config
         )
         print("Utworzono symulator (brak dostępu do prawdziwego urządzenia)")
 
@@ -987,7 +1320,7 @@ if __name__ == "__main__":
 
         # Test ruchu
         target_positions = [
-            Position(20.0, 80.0),
+            Position(20.0, 0.0),
             Position(45.0, 30.0),
             Position(90.0, 45.0),
             Position(0.0, 0.0)       # powrót do pozycji domowej

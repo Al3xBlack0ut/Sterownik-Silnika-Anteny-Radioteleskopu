@@ -1,6 +1,23 @@
-fastapi>=0.109.1
-uvicorn[standard]>=0.24.0
-pydantic>=2.10.0
+# === PODSTAWOWE ZALEŻNOŚCI ===
+# Framework Web API
+fastapi>=0.116.0
+uvicorn[standard]>=0.35.0
+
+# Walidacja i serializacja danych
+pydantic>=2.11.0
+
+# Komunikacja szeregowa dla protokołu SPID
 pyserial>=3.5
-ephem==4.1.5
-pyspellchecker==0.7.2
+
+# Kontroler rotatorów (Hamlib)
+# Uwaga: rotctl musi być zainstalowany systemowo (brew install hamlib lub apt-get install hamlib-utils)
+
+# Obliczenia astronomiczne
+ephem>=4.1.5
+
+# === OPCJONALNE ZALEŻNOŚCI ===
+# Obsługa plików konfiguracyjnych (używane w kalibracjach)
+PyYAML>=6.0.0
+
+# Obsługa zmiennych środowiskowych (dla konfiguracji)
+python-dotenv>=1.0.0

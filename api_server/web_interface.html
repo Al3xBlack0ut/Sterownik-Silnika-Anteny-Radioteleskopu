@@ -215,6 +215,23 @@
             flex-wrap: wrap;
         }
 
+        .tracking-button {
+            width: 160px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .tracking-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: flex-start;
+        }
+
+        .tracking-buttons .tracking-button {
+            flex: 0 0 160px;
+        }
+
         .astronomical-objects {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
@@ -239,6 +256,61 @@
 
         .object-button.selected {
             background: #FF9800;
+        }
+
+        .manual-control {
+            display: flex;
+            justify-content: space-around;
+            margin: 20px 0;
+        }
+
+        .axis-control {
+            text-align: center;
+        }
+
+        .axis-control h4 {
+            margin: 0 0 10px 0;
+            color: #ccc;
+        }
+
+        .axis-buttons {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .axis-btn {
+            background: #FF6B35;
+            border: none;
+            color: white;
+            padding: 15px 20px;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.3s;
+            user-select: none;
+            min-width: 60px;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .axis-btn:hover {
+            background: #E55A2B;
+            transform: scale(1.1);
+        }
+
+        .axis-btn:active {
+            background: #CC4E24;
+            transform: scale(0.95);
+        }
+
+        .axis-label {
+            font-weight: bold;
+            color: #ccc;
+            min-width: 30px;
         }
 
         .log-controls {
@@ -421,6 +493,36 @@
                     </div>
 
                     <div class="card">
+                        <h3>Sterowanie Ręczne</h3>
+                        <div class="manual-control">
+                            <div class="axis-control">
+                                <h4>Azymut</h4>
+                                <div class="axis-buttons">
+                                    <button class="axis-btn" 
+                                            onclick="singleAxisMove('azimuth', 'negative')">◄</button>
+                                    <span class="axis-label">Az</span>
+                                    <button class="axis-btn" 
+                                            onclick="singleAxisMove('azimuth', 'positive')">►</button>
+                                </div>
+                            </div>
+                            <div class="axis-control">
+                                <h4>Elewacja</h4>
+                                <div class="axis-buttons">
+                                    <button class="axis-btn" 
+                                            onclick="singleAxisMove('elevation', 'positive')">▲</button>
+                                    <span class="axis-label">El</span>
+                                    <button class="axis-btn" 
+                                            onclick="singleAxisMove('elevation', 'negative')">▼</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label>Wielkość kroku (°):</label>
+                            <input type="number" id="stepSizeInput" min="0.1" max="10" step="0.1" value="1.0">
+                        </div>
+                    </div>
+
+                    <div class="card">
                         <h3>Śledzenie Astronomiczne</h3>
 
                         <div class="control-group">
@@ -468,11 +570,11 @@
                             </select>
                         </div>
 
-                        <div class="button-group">
-                            <button onclick="startTracking()">Rozpocznij Śledzenie</button>
-                            <button onclick="stopTracking()">Zatrzymaj Śledzenie</button>
-                            <button onclick="getObjectPosition()">Pozycja Obiektu</button>
-                            <button onclick="moveToObject()">Przesuń do Obiektu</button>
+                        <div class="tracking-buttons">
+                            <button class="tracking-button" onclick="startTracking()">Rozpocznij Śledzenie</button>
+                            <button class="tracking-button" onclick="stopTracking()">Zatrzymaj Śledzenie</button>
+                            <button class="tracking-button" onclick="getObjectPosition()">Pozycja Obiektu</button>
+                            <button class="tracking-button" onclick="moveToObject()">Przesuń do Obiektu</button>
                         </div>
                     </div>
 
@@ -868,6 +970,11 @@
                 isConnected = true;
                 updateConnectionStatus();
                 log('Połączenie nawiązane', 'success');
+                
+                // Wczytaj kalibrację po połączeniu
+                setTimeout(() => {
+                    loadCalibrationSettings();
+                }, 1000);
 
             } catch (error) {
                 log(`Błąd połączenia z ${document.getElementById('simulatorMode').checked ? 'symulatorem' : 'sprzętem'}: ${error.message}`, 'error');
@@ -1149,20 +1256,96 @@
 
         async function calibrateNorth() {
             try {
-                await apiCall('/calibrate/north', 'POST');
-                log('Kalibracja północy zakończona', 'success');
+                const invertAzimuth = document.getElementById('invertAzimuth').checked;
+                const response = await apiCall('/calibrate_azimuth', 'POST', {
+                    current_azimuth: null,
+                    invert_azimuth: invertAzimuth,
+                    save_to_file: true
+                });
+                log(`Kalibracja północy zakończona. Offset: ${response.azimuth_offset.toFixed(2)}°`, 'success');
             } catch (error) {
-                log('Błąd kalibracji północy', 'error');
+                log('Błąd kalibracji północy: ' + error.message, 'error');
             }
         }
 
         async function resetCalibration() {
             try {
-                await apiCall('/calibrate/reset', 'POST');
-                log('Kalibracja zresetowana', 'success');
+                await apiCall('/reset_calibration', 'POST');
+                log('Kalibracja zresetowana do wartości domyślnych', 'success');
+                // Zaktualizuj interfejs
+                await loadCalibrationSettings();
             } catch (error) {
-                log('Błąd resetowania kalibracji', 'error');
+                log('Błąd resetowania kalibracji: ' + error.message, 'error');
             }
+        }
+
+        async function applyAxisSettings() {
+            const invertAzimuth = document.getElementById('invertAzimuth').checked;
+            const invertElevation = document.getElementById('invertElevation').checked;
+            const azimuthOffset = parseFloat(document.getElementById('azimuthOffset').value) || 0;
+            const elevationOffset = parseFloat(document.getElementById('elevationOffset').value) || 0;
+
+            try {
+                await apiCall('/calibration', 'POST', {
+                    azimuth_inverted: invertAzimuth,
+                    azimuth_offset: azimuthOffset,
+                    elevation_inverted: invertElevation,
+                    elevation_offset: elevationOffset
+                });
+                
+                log('Zastosowano ustawienia kalibracji', 'success');
+                
+                // Zapisz ustawienia w lokalnej pamięci
+                localStorage.setItem('invertAzimuth', invertAzimuth);
+                localStorage.setItem('invertElevation', invertElevation);
+                localStorage.setItem('azimuthOffset', azimuthOffset);
+                localStorage.setItem('elevationOffset', elevationOffset);
+                
+            } catch (error) {
+                log('Błąd ustawiania kalibracji: ' + error.message, 'error');
+            }
+        }
+
+        async function loadCalibrationSettings() {
+            try {
+                const calibration = await apiCall('/calibration', 'GET');
+                
+                document.getElementById('invertAzimuth').checked = calibration.azimuth_inverted;
+                document.getElementById('invertElevation').checked = calibration.elevation_inverted;
+                document.getElementById('azimuthOffset').value = calibration.azimuth_offset.toFixed(2);
+                document.getElementById('elevationOffset').value = calibration.elevation_offset.toFixed(2);
+                
+                log('Wczytano ustawienia kalibracji', 'success');
+                
+            } catch (error) {
+                log('Błąd wczytywania kalibracji: ' + error.message, 'error');
+            }
+        }
+
+        function getStepSize() {
+            return parseFloat(document.getElementById('stepSizeInput').value) || 1.0;
+        }
+
+        async function singleAxisMove(axis, direction) {
+            const stepSize = getStepSize();
+            
+            try {
+                await apiCall('/move_axis', 'POST', {
+                    axis: axis,
+                    direction: direction,
+                    amount: stepSize
+                });
+                
+                log(`Ruch ${axis} ${direction} o ${stepSize}°`);
+                
+            } catch (error) {
+                log(`Błąd ruchu w osi: ${error.message}`, 'error');
+            }
+        }
+
+        function applyOffsets() {
+            // Ta funkcja jest teraz zastąpiona przez applyAxisSettings()
+            applyAxisSettings();
         }
 
         function toggleAdvancedOptions(button) {
@@ -1172,35 +1355,8 @@
             button.textContent = isVisible ? 'Opcje Zaawansowane ▼' : 'Opcje Zaawansowane ▲';
         }
 
-        function applyAxisSettings() {
-            const invertAzimuth = document.getElementById('invertAzimuth').checked;
-            const invertElevation = document.getElementById('invertElevation').checked;
-
-            // Zapisz ustawienia osi w lokalnej pamięci
-            localStorage.setItem('invertAzimuth', invertAzimuth);
-            localStorage.setItem('invertElevation', invertElevation);
-
-            log('Zastosowano ustawienia osi', 'success');
-        }
-
-        function applyOffsets() {
-            const azimuthOffset = parseFloat(document.getElementById('azimuthOffset').value);
-            const elevationOffset = parseFloat(document.getElementById('elevationOffset').value);
-
-            if (isNaN(azimuthOffset) || isNaN(elevationOffset)) {
-                log('Nieprawidłowe wartości offsetu', 'error');
-                return;
-            }
-
-            // Zapisz offsety w lokalnej pamięci
-            localStorage.setItem('azimuthOffset', azimuthOffset);
-            localStorage.setItem('elevationOffset', elevationOffset);
-
-            log(`Zastosowano offset kalibracji: Az ${azimuthOffset}°, El ${elevationOffset}°`, 'success');
-        }
-
-        // Przywróć ustawienia osi i offsety z lokalnej pamięci przy starcie
-        document.addEventListener('DOMContentLoaded', function() {
+        // Zaktualizowana funkcja inicjalizacji ustawień z pamięci lokalnej
+        function loadLocalSettings() {
             const invertAzimuth = localStorage.getItem('invertAzimuth') === 'true';
             const invertElevation = localStorage.getItem('invertElevation') === 'true';
             const azimuthOffset = parseFloat(localStorage.getItem('azimuthOffset')) || 0;
@@ -1210,6 +1366,18 @@
             document.getElementById('invertElevation').checked = invertElevation;
             document.getElementById('azimuthOffset').value = azimuthOffset;
             document.getElementById('elevationOffset').value = elevationOffset;
+        }
+
+        // Przywróć ustawienia przy starcie
+        document.addEventListener('DOMContentLoaded', function() {
+            loadLocalSettings();
+            
+            // Wczytaj kalibrację z serwera po połączeniu
+            setTimeout(() => {
+                if (isConnected) {
+                    loadCalibrationSettings();
+                }
+            }, 2000);
         });
     </script>
 </body>

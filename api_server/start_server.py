@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Skrypt uruchamiający serwer API radioteleskopa
 """

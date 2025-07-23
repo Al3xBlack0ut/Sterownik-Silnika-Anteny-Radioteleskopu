@@ -202,7 +202,7 @@ def grid_sky_scan():
 
     # Parametry skanowania
     az_start, az_end, az_step = 0, 360, 30  # Co 30° w azymucie
-    el_start, el_end, el_step = 0, 90, 10  # Co 20° w elewacji
+    el_start, el_end, el_step = 0, 30, 10  # Co 20° w elewacji
 
     # Generowanie siatki pozycji
     scan_positions = []

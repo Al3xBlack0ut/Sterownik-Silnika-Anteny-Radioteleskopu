@@ -12,13 +12,16 @@ Autor: Aleks Czarnecki
 6. [Podstawowe użycie](#podstawowe-użycie)
 7. [Protokół SPID](#protokół-spid)
 8. [Kalkulator astronomiczny](#kalkulator-astronomiczny)
-9. [System bezpieczeństwa](#system-bezpieczeństwa)
-10. [Przykłady użycia](#przykłady-użycia)
-11. [Rozwiązywanie problemów](#rozwiązywanie-problemów)
+9. [Zarządzanie kalibracją](#zarządzanie-kalibracją)
+10. [System bezpieczeństwa](#system-bezpieczeństwa)
+11. [Przykłady użycia](#przykłady-użycia)
+12. [Rozwiązywanie problemów](#rozwiązywanie-problemów)
 
 ## Wprowadzenie
 
-Sterownik Silnika Anteny Radioteleskopu to kompletny system do sterowania anteną radioteleskopu z wykorzystaniem protokołu SPID. System oferuje zarówno **bibliotekę Python** do bezpośredniego użycia, jak i **API REST Server** z interfejsem webowym.
+Sterownik Silnika Anteny Radioteleskopu to kompletny system do sterowania anteną radioteleskopu z wykorzystaniem protokołu SPID. System oferuje zarówno **Biblioteka Python:**
+
+```python do bezpośredniego użycia, jak i **API REST Server** z interfejsem webowym.
 
 ### Główne funkcjonalności
 
@@ -27,6 +30,7 @@ Sterownik Silnika Anteny Radioteleskopu to kompletny system do sterowania anten�
 - **Sterowanie pozycją anteny** — precyzyjne pozycjonowanie w azymutcie i elewacji
 - **Kalkulator astronomiczny** — obliczanie pozycji Słońca, Księżyca, planet i gwiazd
 - **Śledzenie obiektów** — automatyczne śledzenie obiektów astronomicznych
+- **Zarządzanie kalibracją** — trwałe przechowywanie parametrów kalibracji w plikach JSON
 - **Monitorowanie w czasie rzeczywistym** — ciągłe śledzenie pozycji i stanu anteny
 - **Bezpieczeństwo** — automatyczne sprawdzanie limitów mechanicznych i awaryjne zatrzymanie
 - **Symulator** — tryb symulacji do testów bez fizycznego sprzętu
@@ -65,14 +69,20 @@ radioteleskop/
 │   ├── start_server.py       # Skrypt uruchamiający
 │   ├── requirements.txt      # Zależności API
 │   └── api_reference.md      # Dokumentacja API
+├── calibrations/             # Pliki kalibracji (JSON)
+│   └── antenna_calibration.json # Domyślna kalibracja
 ├── examples/                 # Przykłady użycia
 │   ├── basic_usage.py       # Podstawowe sterowanie
 │   ├── advanced_usage.py    # Zaawansowane funkcje
+│   ├── calibration_example.py # Przykład zarządzania kalibracją
 │   └── api_examples.py      # Przykłady API
 ├── tests/                   # Testy jednostkowe
 │   ├── tests.py            # Główne testy
-│   └── test_spid_protocol.py # Testy protokołu
-├── requirements.txt        # Zależności projektu
+│   ├── test_spid_protocol.py # Testy protokołu
+│   └── test_calibration.py  # Testy kalibracji
+├── requirements.txt        # Zależności podstawowe
+├── requirements-minimal.txt # Minimalne zależności
+├── requirements-dev.txt    # Narzędzia deweloperskie
 └── readme.md               # Ta dokumentacja
 ```
 
@@ -86,11 +96,46 @@ radioteleskop/
 
 ### Instalacja zależności
 
-**Biblioteki Python:**
+**Podstawowa instalacja (zalecana):**
+
+```bash
+# Utwórz środowisko wirtualne
+python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
+# lub: venv\Scripts\activate  # Windows
+
+# Zainstaluj podstawowe zależności
+pip install -r requirements.txt
+```
+
+**Minimalna instalacja (tylko kluczowe pakiety):**
+
+```bash
+pip install -r requirements-minimal.txt
+```
+
+**Instalacja dla deweloperów (z narzędziami):**
 
 ```bash
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
+
+### Uruchamianie
+
+**Serwer API:**
+
+```bash
+# Aktywuj venv
+source venv/bin/activate
+
+# Uruchom serwer
+cd api_server && python main.py
+```
+
+**Biblioteka Python:**
+
+```python
 
 ### Konfiguracja sprzętu
 
@@ -182,7 +227,7 @@ System obsługuje natywnie protokół SPID (Serial Protocol Interface Device):
 
 - **Słońce** — pozycja słoneczna
 - **Księżyc** — fazy i pozycja księżyca
-- **Planety** — Mercury, Venus, Mars, Jupiter, Saturn
+- **Planety** — Merkury, Wenus, Mars, Jowisz, Saturn, Neptun, Uran
 - **Gwiazdy** — katalog gwiazd jasnych
 
 ### Przykład użycia
@@ -202,12 +247,84 @@ sun_pos = calc.calculate_object_position("Sun", ObjectType.SUN)
 print(f"Słońce: Az {sun_pos.azimuth:.1f}°, El {sun_pos.elevation:.1f}°")
 ```
 
+## Zarządzanie kalibracją
+
+System oferuje możliwość trwałego przechowywania parametrów kalibracji anteny w plikach JSON. Pozwala to na zachowanie ustawień kalibracji między sesjami pracy.
+
+### Funkcjonalności kalibracji
+
+- **Automatyczne wczytywanie** — kalibracja jest automatycznie wczytywana podczas inicjalizacji
+- **Automatyczne zapisywanie** — opcjonalny automatyczny zapis po każdej zmianie parametrów
+- **Wiele profili** — możliwość zarządzania różnymi profilami kalibracji
+- **Kopia zapasowa** — łatwe tworzenie i przywracanie kopii zapasowych
+
+### Format pliku kalibracji
+
+Pliki kalibracji są zapisywane w formacie JSON w folderze `calibrations/`:
+
+```json
+{
+    "azimuth_inverted": false,
+    "azimuth_offset": 0.0,
+    "elevation_inverted": true, 
+    "elevation_offset": 0.0,
+    "created_at": "2025-07-23 10:30:45",
+    "version": "1.0"
+}
+```
+
+### Użycie kalibracji
+
+```python
+from antenna_controller import AntennaControllerFactory, PositionCalibration
+
+# Utworzenie kontrolera z automatycznym wczytaniem kalibracji
+controller = AntennaControllerFactory.create_spid_controller(
+    port="/dev/ttyUSB0",
+    calibration_file="calibrations/my_antenna.json"
+)
+
+# Zmiana parametrów kalibracji
+new_calibration = PositionCalibration(
+    azimuth_offset=45.0,
+    elevation_inverted=False
+)
+
+# Ustawienie z automatycznym zapisem
+controller.set_position_calibration(new_calibration, save_to_file=True)
+
+# Ręczne zarządzanie kalibracją
+controller.save_calibration("calibrations/backup.json")
+controller.load_calibration("calibrations/site_specific.json")
+controller.reset_calibration()  # Powrót do wartości domyślnych
+```
+
+### Kalibracja referencji azymutu
+
+```python
+# Kalibracja punktu referencyjnego (np. północ magnetyczna)
+controller.calibrate_azimuth_reference(
+    current_azimuth=135.0,  # Aktualna pozycja anteny
+    invert_azimuth=False,   # Czy odwrócić kierunek
+    save_to_file=True       # Automatyczny zapis
+)
+```
+
+### Dostępne metody
+
+| Metoda | Opis |
+|--------|------|
+| `save_calibration()` | Zapisuje aktualną kalibrację do pliku |
+| `load_calibration()` | Wczytuje kalibrację z pliku |
+| `reset_calibration()` | Resetuje kalibrację do wartości domyślnych |
+| `calibrate_azimuth_reference()` | Kalibruje punkt referencyjny azymutu |
+
 ## System bezpieczeństwa
 
 ### Limity mechaniczne
 
 - **Azymut:** 0° - 360° (konfigurowalny)
-- **Elewacja:** -90° - +90° (konfigurowalny)
+- **Elewacja:** 0° - +90° (konfigurowalny)
 - **Prędkość:** Ograniczenia prędkości ruchu
 
 ### Awaryjne zatrzymanie
