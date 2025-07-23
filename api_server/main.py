@@ -19,8 +19,8 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from antenna_controller import (
-    AntennaControllerFactory, AntennaController, Position, AntennaError, 
-    MotorConfig, AntennaLimits, get_best_spid_port, 
+    AntennaControllerFactory, AntennaController, Position, AntennaError,
+    MotorConfig, AntennaLimits, get_best_spid_port,
     AntennaState, PositionCalibration, DEFAULT_SPID_PORT
 )
 from astronomic_calculator import (
@@ -37,7 +37,8 @@ astro_calculator: Optional[AstronomicalCalculator] = None
 current_observer_location: Optional[ObserverLocation] = None
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
+    """Lifecycle manager for FastAPI app"""
     # Startup
     logger.info("Uruchamianie API radioteleskopa...")
     yield
@@ -112,15 +113,12 @@ class AstronomicalObjectModel(BaseModel):
 
 class CalibrationModel(BaseModel):
     """Model kalibracji anteny"""
-    azimuth_inverted: bool = Field(False, description="Czy azymut jest odwrócony")
     azimuth_offset: float = Field(0.0, description="Offset azymutu w stopniach")
-    elevation_inverted: bool = Field(False, description="Czy elewacja jest odwrócona")
     elevation_offset: float = Field(0.0, description="Offset elewacji w stopniach")
 
 class AzimuthCalibrationModel(BaseModel):
     """Model kalibracji azymutu"""
     current_azimuth: Optional[float] = Field(None, description="Aktualna pozycja azymutu (jeśli None, użyje aktualnej)")
-    invert_azimuth: bool = Field(False, description="Czy odwrócić kierunek azymutu")
     save_to_file: bool = Field(True, description="Czy zapisać kalibrację do pliku")
 
 class AxisMoveModel(BaseModel):
@@ -171,7 +169,9 @@ async def get_status():
     """Pobierz aktualny status systemu anteny"""
     global antenna_controller, current_observer_location
 
-    connected = antenna_controller is not None and hasattr(antenna_controller.motor_driver, 'connected') and antenna_controller.motor_driver.connected
+    connected = (antenna_controller is not None and
+                 hasattr(antenna_controller.motor_driver, 'connected') and
+                 antenna_controller.motor_driver.connected)
     current_position = None
     is_moving = False
     last_error = None
@@ -414,27 +414,28 @@ async def diagnostic():
     """Sprawdź czy rotctl i SPID działają"""
     try:
         import subprocess
-        
+
         # Test rotctl
-        rotctl_result = subprocess.run(['rotctl', '--version'], 
-                                     capture_output=True, text=True, timeout=5)
+        rotctl_result = subprocess.run(['rotctl', '--version'],
+                                       capture_output=True, text=True, timeout=5, check=False)
         rotctl_available = rotctl_result.returncode == 0
-        
+
         # Test połączenia ze SPID
-        spid_result = subprocess.run(['rotctl', '-m', '903', '-r', DEFAULT_SPID_PORT, 
-                                    '-s', '115200', '-t', '2', 'get_pos'], 
-                                   capture_output=True, text=True, timeout=10)
+        spid_result = subprocess.run(['rotctl', '-m', '903', '-r', DEFAULT_SPID_PORT,
+                                      '-s', '115200', '-t', '2', 'get_pos'],
+                                     capture_output=True, text=True, timeout=10, check=False)
         spid_connected = spid_result.returncode == 0
-        
+
         return {
             "rotctl_available": rotctl_available,
             "rotctl_version": rotctl_result.stdout.strip() if rotctl_available else "N/A",
             "spid_connected": spid_connected,
             "spid_error": spid_result.stderr.strip() if not spid_connected else "OK",
             "default_port": DEFAULT_SPID_PORT,
-            "recommendation": "Użyj symulatora jeśli SPID nie odpowiada" if not spid_connected else "SPID ready"
+            "recommendation": ("Użyj symulatora jeśli SPID nie odpowiada"
+                               if not spid_connected else "SPID ready")
         }
-        
+
     except Exception as e:
         logger.error(f"Błąd diagnostyki: {e}")
         raise HTTPException(status_code=500, detail=f"Błąd diagnostyki: {str(e)}")
@@ -476,7 +477,7 @@ async def get_astronomical_position(object_name: str):
             "magnitude": position.magnitude if hasattr(position, 'magnitude') else None
         }
 
-    except ValueError as e:
+    except ValueError:
         logger.error(f"Nieprawidłowy obiekt astronomiczny: {object_name}")
         raise HTTPException(status_code=400, detail=f"Nieprawidłowy obiekt astronomiczny: {object_name}")
     except Exception as e:
@@ -487,22 +488,20 @@ async def get_astronomical_position(object_name: str):
 async def calibrate_azimuth_reference(calibration: AzimuthCalibrationModel):
     """Kalibruje punkt referencyjny azymutu (ustala nowe 0°)"""
     controller = get_antenna_controller()
-    
+
     try:
         controller.calibrate_azimuth_reference(
             current_azimuth=calibration.current_azimuth,
-            invert_azimuth=calibration.invert_azimuth,
             save_to_file=calibration.save_to_file
         )
-        
+
         logger.info(f"Kalibracja azymutu wykonana. Offset: {controller.position_calibration.azimuth_offset:.2f}°")
         return {
             "status": "calibrated",
             "azimuth_offset": controller.position_calibration.azimuth_offset,
-            "azimuth_inverted": controller.position_calibration.azimuth_inverted,
             "saved_to_file": calibration.save_to_file
         }
-        
+
     except Exception as e:
         logger.error(f"Błąd kalibracji azymutu: {e}")
         raise HTTPException(status_code=500, detail=f"Błąd kalibracji azymutu: {str(e)}")
@@ -511,16 +510,14 @@ async def calibrate_azimuth_reference(calibration: AzimuthCalibrationModel):
 async def get_calibration():
     """Pobierz aktualne parametry kalibracji"""
     controller = get_antenna_controller()
-    
+
     try:
         cal = controller.position_calibration
         return CalibrationModel(
-            azimuth_inverted=cal.azimuth_inverted,
             azimuth_offset=cal.azimuth_offset,
-            elevation_inverted=cal.elevation_inverted,
             elevation_offset=cal.elevation_offset
         )
-        
+
     except Exception as e:
         logger.error(f"Błąd pobierania kalibracji: {e}")
         raise HTTPException(status_code=500, detail=f"Błąd pobierania kalibracji: {str(e)}")
@@ -529,20 +526,18 @@ async def get_calibration():
 async def set_calibration(calibration: CalibrationModel):
     """Ustaw parametry kalibracji"""
     controller = get_antenna_controller()
-    
+
     try:
         new_cal = PositionCalibration(
-            azimuth_inverted=calibration.azimuth_inverted,
             azimuth_offset=calibration.azimuth_offset,
-            elevation_inverted=calibration.elevation_inverted,
             elevation_offset=calibration.elevation_offset
         )
-        
+
         controller.set_position_calibration(new_cal, save_to_file=True)
-        
+
         logger.info("Kalibracja została ustawiona i zapisana")
         return {"status": "set", "calibration": calibration.model_dump()}
-        
+
     except Exception as e:
         logger.error(f"Błąd ustawiania kalibracji: {e}")
         raise HTTPException(status_code=500, detail=f"Błąd ustawiania kalibracji: {str(e)}")
@@ -551,12 +546,12 @@ async def set_calibration(calibration: CalibrationModel):
 async def reset_calibration():
     """Resetuj kalibrację do wartości domyślnych"""
     controller = get_antenna_controller()
-    
+
     try:
         controller.reset_calibration(save_to_file=True)
         logger.info("Kalibracja została zresetowana do wartości domyślnych")
         return {"status": "reset", "message": "Kalibracja zresetowana do wartości domyślnych"}
-        
+
     except Exception as e:
         logger.error(f"Błąd resetowania kalibracji: {e}")
         raise HTTPException(status_code=500, detail=f"Błąd resetowania kalibracji: {str(e)}")
@@ -565,30 +560,30 @@ async def reset_calibration():
 async def move_axis(move: AxisMoveModel):
     """Porusz anteną w określonej osi o zadaną wartość"""
     controller = get_antenna_controller()
-    
+
     try:
         # Użyj skalibrowanej pozycji do obliczeń
         current_pos = controller.get_current_position(apply_reverse_calibration=True)
-        
+
         if move.axis.lower() == "azimuth":
             if move.direction.lower() == "positive":
                 new_azimuth = (current_pos.azimuth + move.amount) % 360
             else:  # negative
                 new_azimuth = (current_pos.azimuth - move.amount) % 360
             new_position = Position(azimuth=new_azimuth, elevation=current_pos.elevation)
-            
+
         elif move.axis.lower() == "elevation":
             if move.direction.lower() == "positive":
                 new_elevation = min(current_pos.elevation + move.amount, 90)
             else:  # negative
                 new_elevation = max(current_pos.elevation - move.amount, 0)
             new_position = Position(azimuth=current_pos.azimuth, elevation=new_elevation)
-            
+
         else:
             raise HTTPException(status_code=400, detail="Oś musi być 'azimuth' lub 'elevation'")
-        
+
         controller.move_to(new_position)
-        
+
         logger.info(f"Ruch w osi {move.axis}: {move.direction} o {move.amount}°")
         return {
             "status": "moving",
@@ -597,14 +592,15 @@ async def move_axis(move: AxisMoveModel):
             "amount": move.amount,
             "new_position": {"azimuth": new_position.azimuth, "elevation": new_position.elevation}
         }
-        
+
     except Exception as e:
         logger.error(f"Błąd ruchu w osi: {e}")
         raise HTTPException(status_code=500, detail=f"Błąd ruchu w osi: {str(e)}")
 
 # Obsługa błędów
 @app.exception_handler(AntennaError)
-async def antenna_error_handler(request, exc: AntennaError):
+async def antenna_error_handler(_request, exc: AntennaError):
+    """Handle antenna errors"""
     logger.error(f"Błąd anteny: {exc}")
     return JSONResponse(
         status_code=500,
@@ -612,7 +608,8 @@ async def antenna_error_handler(request, exc: AntennaError):
     )
 
 @app.exception_handler(Exception)
-async def general_exception_handler(request, exc: Exception):
+async def general_exception_handler(_request, exc: Exception):
+    """Handle general exceptions"""
     import traceback
     tb_str = traceback.format_exc()
     logger.error(f"Nieoczekiwany błąd: {exc}\n{tb_str}")

@@ -1,432 +1,635 @@
 # Sterownik Silnika Anteny Radioteleskopu
 
-Autor: Aleks Czarnecki
+**Kompletny system sterowania pozycją anteny radioteleskopu z wykorzystaniem protokołu SPID i rotctl**
+
+Autor: **Aleks Czarnecki** 
+
+---
 
 ## Spis treści
 
 1. [Wprowadzenie](#wprowadzenie)
-2. [Architektura systemu](#architektura-systemu)
+2. [Architektura systemu](#architektura-systemu)  
 3. [Struktura projektu](#struktura-projektu)
 4. [Instalacja i konfiguracja](#instalacja-i-konfiguracja)
-5. [API REST Server](#api-rest-server)
+5. [REST API Server](#rest-api-server)
 6. [Podstawowe użycie](#podstawowe-użycie)
-7. [Protokół SPID](#protokół-spid)
+7. [Protokół SPID i rotctl](#protokół-spid-i-rotctl)
 8. [Kalkulator astronomiczny](#kalkulator-astronomiczny)
 9. [Zarządzanie kalibracją](#zarządzanie-kalibracją)
 10. [System bezpieczeństwa](#system-bezpieczeństwa)
 11. [Przykłady użycia](#przykłady-użycia)
 12. [Rozwiązywanie problemów](#rozwiązywanie-problemów)
 
+---
+
 ## Wprowadzenie
 
-Sterownik Silnika Anteny Radioteleskopu to kompletny system do sterowania anteną radioteleskopu z wykorzystaniem protokołu SPID. System oferuje zarówno **Biblioteka Python:**
-
-```python do bezpośredniego użycia, jak i **API REST Server** z interfejsem webowym.
+**Sterownik Silnika Anteny Radioteleskopu** to zaawansowany system sterowania pozycją anteny z wykorzystaniem protokołu **SPID** przez **rotctl (Hamlib)**. System oferuje kompletne rozwiązanie do precyzyjnego pozycjonowania silnika anteny, śledzenia obiektów astronomicznych i zdalnego sterowania przez API.
 
 ### Główne funkcjonalności
 
-- **Protokół SPID** — natywna obsługa protokołu SPID (Serial Protocol Interface Device)
-- **API REST Server** — serwer HTTP z interfejsem webowym do zdalnego sterowania
-- **Sterowanie pozycją anteny** — precyzyjne pozycjonowanie w azymutcie i elewacji
-- **Kalkulator astronomiczny** — obliczanie pozycji Słońca, Księżyca, planet i gwiazd
-- **Śledzenie obiektów** — automatyczne śledzenie obiektów astronomicznych
-- **Zarządzanie kalibracją** — trwałe przechowywanie parametrów kalibracji w plikach JSON
-- **Monitorowanie w czasie rzeczywistym** — ciągłe śledzenie pozycji i stanu anteny
-- **Bezpieczeństwo** — automatyczne sprawdzanie limitów mechanicznych i awaryjne zatrzymanie
-- **Symulator** — tryb symulacji do testów bez fizycznego sprzętu
-- **Interfejs webowy** — nowoczesny panel kontrolny dostępny przez przeglądarkę
+- Protokół SPID — obsługa kontrolerów MD-01/02/03 przez rotctl (Hamlib)
+- REST API Server — serwer FastAPI z nowoczesnym interfejsem webowym
+- Precyzyjne pozycjonowanie — sterowanie azymutem i elewacją z dokładnością do 0.1°
+- Kalkulator astronomiczny — PyEphem do obliczania pozycji Słońca, Księżyca, planet i gwiazd
+- Automatyczne śledzenie — ciągłe śledzenie obiektów niebieskich
+- Zarządzanie kalibracją — trwałe przechowywanie kalibracji w JSON
+- Monitorowanie czasu rzeczywistego — ciągły monitoring pozycji i stanu
+- System bezpieczeństwa — limity mechaniczne i awaryjne zatrzymanie
+- Tryb symulatora — pełne testy bez fizycznego sprzętu
+- Interfejs webowy — nowoczesny panel kontrolny w przeglądarce
+
+---
 
 ## Architektura systemu
 
-System składa się z następujących głównych komponentów:
-
 ```text
-┌─────────────────────────────────────┐
-│      REST API Server (FastAPI)      │ ← Interfejs HTTP + Web UI
-├─────────────────────────────────────┤
-│      AstronomicalCalculator         │ ← Obliczenia astronomiczne
-├─────────────────────────────────────┤
-│        AntennaController            │ ← Główny kontroler
-├─────────────────────────────────────┤
-│         MotorDriver                 │ ← Abstrakcja sterownika
-├─────────────────────────────────────┤
-│  SPIDMotorDriver | SimulatedDriver  │ ← Konkretne implementacje
-├─────────────────────────────────────┤
-│      Komunikacja szeregowa          │ ← Warstwa fizyczna (SPID)
-└─────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│       REST API Server (FastAPI)      │ ← HTTP API + Web Interface
+├──────────────────────────────────────┤
+│   AstronomicalCalculator (PyEphem)   │ ← Obliczenia astronomiczne  
+├──────────────────────────────────────┤
+│         AntennaController            │ ← Główny kontroler
+├──────────────────────────────────────┤
+│      RotctlMotorDriver (Hamlib)      │ ← Sterownik przez rotctl
+├──────────────────────────────────────┤
+│RotctlMotorDriver│SimulatedMotorDriver│ ← Sterowniki silnika (rzeczywisty/symulator)
+└──────────────────────────────────────┘
+            ↕ USB/RS232                 
+┌──────────────────────────────────────┐
+│      Kontroler SPID MD-01/02/03      │ ← Fizyczny kontroler silnika anteny
+├──────────────────────────────────────┤
+│     Silnik anteny radioteleskopu     │ ← Fizyczny silnik pozycjonujący
+└──────────────────────────────────────┘
 ```
-
 ## Struktura projektu
 
 ```text
 radioteleskop/
-├── antenna_controller.py      # Główna biblioteka kontrolera
-├── astronomic_calculator.py   # Kalkulator pozycji astronomicznych
-├── emergency_stop.py          # System awaryjnego zatrzymania
-├── api_server/                # REST API Server
-│   ├── main.py               # Główny serwer FastAPI
-│   ├── web_interface.html    # Interfejs webowy
-│   ├── start_server.py       # Skrypt uruchamiający
-│   ├── requirements.txt      # Zależności API
-│   └── api_reference.md      # Dokumentacja API
-├── calibrations/             # Pliki kalibracji (JSON)
-│   └── antenna_calibration.json # Domyślna kalibracja
-├── examples/                 # Przykłady użycia
-│   ├── basic_usage.py       # Podstawowe sterowanie
-│   ├── advanced_usage.py    # Zaawansowane funkcje
-│   ├── calibration_example.py # Przykład zarządzania kalibracją
-│   └── api_examples.py      # Przykłady API
-├── tests/                   # Testy jednostkowe
-│   ├── tests.py            # Główne testy
-│   ├── test_spid_protocol.py # Testy protokołu
-│   └── test_calibration.py  # Testy kalibracji
-├── requirements.txt        # Zależności podstawowe
-├── requirements-minimal.txt # Minimalne zależności
-├── requirements-dev.txt    # Narzędzia deweloperskie
-└── readme.md               # Ta dokumentacja
+├── antenna_controller.py        # Główny kontroler silnika anteny
+├── astronomic_calculator.py     # Kalkulator astronomiczny PyEphem  
+├── emergency_stop.py            # System awaryjnego zatrzymania
+├── api_server/                  # REST API Server FastAPI
+│   ├── main.py                  # Główny serwer API
+│   ├── web_interface.html       # Interfejs webowy
+│   ├── start_server.py          # Skrypt startowy
+│   └── api_reference.md         # Dokumentacja API endpoints
+├── calibrations/                # Kalibracje anteny (JSON)
+│   └── antenna_calibration.json # Aktualna kalibracja pozycji
+├── examples/                    # Przykłady użycia
+│   ├── basic_usage.py           # Podstawowe sterowanie
+│   ├── advanced_usage.py        # Zaawansowane funkcje
+│   └── calibration_example.py   # Zarządzanie kalibracją
+├── tests/                       # Testy jednostkowe
+│   ├── tests.py                 # Główne testy systemu
+│   ├── test_spid_protocol.py    # Testy protokołu SPID
+│   ├── test_calibration.py      # Testy kalibracji
+│   └── test_spid_protocol.py    # Minimalne testy
+├── requirements.txt             # Zależności Python
+└── README.md                    # Ta dokumentacja
 ```
+
+---
 
 ## Instalacja i konfiguracja
 
 ### Wymagania systemowe
 
-- Python 3.8+
-- Port szeregowy USB/RS232 (dla sprzętu SPID)
-- System operacyjny: Linux, Windows, macOS
+- **Python 3.8+** (zalecane 3.11+)
+- **rotctl (Hamlib)** — biblioteka komunikacji z rotatorami
+- **Port USB/RS232** — do kontrolera SPID
+- **System operacyjny:** Linux, macOS, Windows
 
-### Instalacja zależności
+### Instalacja rotctl (Hamlib)
 
-**Podstawowa instalacja (zalecana):**
+**WAŻNE:** rotctl musi być zainstalowany systemowo przed instalacją Python packages!
+
+
+#### Linux
+
+```bash
+sudo apt-get update
+sudo apt-get install hamlib-utils
+```
+
+#### macOS (Homebrew)
+
+```bash
+brew install hamlib
+```
+
+#### Windows
+
+```bash
+winget install hamlib
+```
+
+#### Weryfikacja instalacji
+
+```bash
+rotctl --version
+# Powinno wyświetlić: rotctl(d) Hamlib 4.x
+```
+
+### Instalacja pakietów Python
+
+**1. Środowisko wirtualne (zalecane):**
 
 ```bash
 # Utwórz środowisko wirtualne
 python3 -m venv venv
-source venv/bin/activate  # Linux/Mac
-# lub: venv\Scripts\activate  # Windows
 
-# Zainstaluj podstawowe zależności
-pip install -r requirements.txt
-```
-
-**Minimalna instalacja (tylko kluczowe pakiety):**
-
-```bash
-pip install -r requirements-minimal.txt
-```
-
-**Instalacja dla deweloperów (z narzędziami):**
-
-```bash
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-```
-
-### Uruchamianie
-
-**Serwer API:**
-
-```bash
-# Aktywuj venv
+# Aktywuj (Linux/macOS)
 source venv/bin/activate
 
-# Uruchom serwer
-cd api_server && python main.py
+# Aktywuj (Windows)
+venv\Scripts\activate
 ```
 
-**Biblioteka Python:**
+**2. Instalacja zależności:**
 
-```python
+```bash
+# Podstawowe zależności
+pip install -r requirements.txt
 
-### Konfiguracja sprzętu
+# Weryfikacja instalacji
+python -c "import serial, ephem, fastapi; print('Wszystkie pakiety zainstalowane')"
+```
 
-1. Podłącz kontroler SPID do portu USB/RS232
-2. Sprawdź dostępne porty: `python -c "import serial.tools.list_ports; print([p.device for p in serial.tools.list_ports.comports()])"`
-3. Skonfiguruj sterownik SPID na 115200 bps
+### Konfiguracja sprzętu SPID
+
+**1. Podłącz kontroler SPID:**
+
+- Użyj kabla USB lub RS232 → USB adapter  
+- Upewnij się, że kontroler jest zasilony
+
+**2. Sprawdź dostępne porty:**
+
+```bash
+python -c "
+import serial.tools.list_ports
+ports = [p.device for p in serial.tools.list_ports.comports()]
+print('Dostępne porty:', ports)
+"
+```
+
+**3. Test komunikacji z rotctl:**
+
+```bash
+# Test podstawowej komunikacji (zmień port na właściwy)
+rotctl -m 903 -r /dev/tty.usbserial-A10PDNT7 -s 115200 p
+```
+
+**Uwagi:**
+
+- Model 903 = SPID MD-01/02/03 ROT2 mode
+- Standardowa prędkość: 115200 bps
+- Linux: może wymagać uprawnień: `sudo usermod -a -G dialout $USER`
+
+
+---
 
 ## API REST Server
 
 ### Szybki start
 
+**Linux/macOS:**
 ```bash
-# Uruchom serwer
+# 1. Aktywuj środowisko wirtualne
+source venv/bin/activate
+
+# 2. Uruchom serwer API
+cd api_server
 python start_server.py
+
+# Lub bezpośrednio:
+python main.py
+```
+
+**Windows:**
+```bash
+# 1. Aktywuj środowisko wirtualne
+venv\Scripts\activate
+
+# 2. Uruchom serwer API
+cd api_server
+python start_server.py
+
+# Lub bezpośrednio:
+python main.py
 ```
 
 ### Dostęp do interfejsów
 
-- **Interfejs webowy:** `http://localhost:8000/web_interface.html`
-- **Dokumentacja API:** `http://localhost:8000/docs`
-- **API Endpoint:** `http://localhost:8000`
+| Interfejs | URL | Opis |
+|-----------|-----|------|
+| **Interfejs webowy** | `http://localhost:8000/web_interface.html` | Główny panel sterowania |
+| **Dokumentacja API** | `http://localhost:8000/docs` | Swagger UI dokumentacja |
+| **API Endpoint** | `http://localhost:8000/api/` | REST API base URL |
+| **Health check** | `http://localhost:8000/health` | Status serwera |
 
 ### Funkcjonalności interfejsu webowego
 
-- Połączenie z anteną (sprzęt/symulator)
-- Sterowanie pozycją anteny
-- Monitorowanie statusu w czasie rzeczywistym
-- Konfiguracja lokalizacji obserwatora
-- Śledzenie obiektów astronomicznych
-- Logi systemu z auto-scroll
-- Awaryjne zatrzymanie (SPACJA lub przycisk)
+- **Połączenie z silnikiem anteny** (sprzęt/symulator)
+- **Sterowanie pozycją** silnika anteny (azymut/elewacja)
+- **Monitorowanie statusu** w czasie rzeczywistym
+- **Konfiguracja lokalizacji** obserwatora (współrzędne geograficzne)
+- **Śledzenie obiektów** astronomicznych
+- **System logów** z auto-scroll
+- **Awaryjne zatrzymanie** (SPACJA lub przycisk)
 
-## Podstawowe użycie
+### Główne endpoints API
 
-### Użycie przez bibliotekę Python
+| HTTP Method | Endpoint | Opis |
+|-------------|----------|------|
+| `POST` | `/api/connect` | Połącz z kontrolerem silnika anteny |
+| `POST` | `/api/disconnect` | Rozłącz kontroler |
+| `GET` | `/api/status` | Pobierz aktualny status |
+| `POST` | `/api/move` | Ustaw pozycję silnika anteny |
+| `POST` | `/api/stop` | Zatrzymaj ruch anteny |
+| `GET` | `/api/position` | Pobierz aktualną pozycję |
+| `POST` | `/api/calibration` | Zarządzaj kalibracją |
+| `POST` | `/api/track` | Śledź obiekt astronomiczny |
+
+---
+
+## Użycie biblioteki Python
+
+### Podstawowy przykład
 
 ```python
-from antenna_controller import AntennaControllerFactory, Position
-from astronomic_calculator import AstronomicalCalculator, ObserverLocation
+from antenna_controller import AntennaController
+from astronomic_calculator import AstronomicalCalculator
+import ephem
 
-# Utworzenie kontrolera
-factory = AntennaControllerFactory()
-controller = factory.create_spid("/dev/ttyUSB0", 115200)
+# 1. Inicjalizacja kontrolera
+controller = AntennaController()
 
-# Inicjalizacja i sterowanie
-controller.initialize()
-controller.move_to_position(Position(azimuth=180.0, elevation=45.0))
+# 2. Połączenie z silnikiem anteny (sprzęt)
+success = controller.connect("/dev/tty.usbserial-A10PDNT7")
+if success:
+    print("Połączono z kontrolerem SPID")
+else:
+    print("Błąd połączenia - użyj symulatora")
+    controller.connect("simulator")
 
-# Pobieranie pozycji
-current_pos = controller.current_position
-print(f"Pozycja: Az {current_pos.azimuth}°, El {current_pos.elevation}°")
+# 3. Podstawowe sterowanie
+controller.move_to_position(180.0, 45.0)  # Azymut 180°, Elewacja 45°
+print(f"Pozycja: {controller.get_current_position()}")
+
+# 4. Śledzenie obiektu astronomicznego
+calculator = AstronomicalCalculator()
+calculator.set_observer_location(50.0614, 19.9365, 220)  # Kraków
+
+# Oblicz pozycję Słońca
+sun_az, sun_el = calculator.calculate_sun_position()
+if sun_el > 0:  # Słońce nad horyzontem
+    controller.move_to_position(sun_az, sun_el)
+    print(f"Śledzi Słońce: {sun_az:.1f}°, {sun_el:.1f}°")
+
+# 5. Rozłączenie systemu
+controller.disconnect()
 ```
 
-### Użycie przez API REST
+### Zaawansowane funkcje
+
+```python
+from antenna_controller import AntennaController, PositionCalibration
+
+# Kalibracja silnika anteny
+calibration = PositionCalibration(
+    azimuth_offset=2.5,    # Korekta azymutu o +2.5°
+    elevation_offset=-1.2   # Korekta elewacji o -1.2°
+)
+
+controller = AntennaController(calibration=calibration)
+controller.connect("/dev/tty.usbserial-A10PDNT7")
+
+# Płynne sterowanie z progiem tolerancji
+controller.move_to_position(
+    azimuth=270.0, 
+    elevation=30.0,
+    tolerance=0.5  # Zatrzymaj w promieniu 0.5°
+)
+
+# Monitoring w czasie rzeczywistym
+import time
+for i in range(10):
+    pos = controller.get_current_position()
+    status = controller.get_status()
+    print(f"Pozycja: {pos}, Status: {status}")
+    time.sleep(1)
+```
+
+---
+
+## Testy i jakość kodu
+
+### Uruchamianie testów
 
 ```bash
-# Połączenie z symulatorem
-curl -X POST http://localhost:8000/connect \
-  -H "Content-Type: application/json" \
-  -d '{"use_simulator": true}'
+# Wszystkie testy
+python -m pytest tests/ -v
 
-# Ustawienie pozycji
-curl -X POST http://localhost:8000/position \
-  -H "Content-Type: application/json" \
-  -d '{"azimuth": 180, "elevation": 45}'
+# Konkretne testy
+python -m pytest tests/tests.py -v
+python -m pytest tests/test_spid_protocol.py -v
+
+# Test z pokryciem
+python -m pytest tests/ --cov=. --cov-report=html
 ```
+
+---
+
+## Przykłady użycia
+
+### Przykład 1: Basic Usage
+
+```python
+# examples/basic_usage.py
+from antenna_controller import AntennaController
+
+# Podstawowe sterowanie silnikiem anteny
+controller = AntennaController()
+controller.connect("simulator")  # lub port USB
+controller.move_to_position(180.0, 45.0)
+print(f"Pozycja: {controller.get_current_position()}")
+```
+
+### Przykład 2: Advanced Usage
+
+```python
+# examples/advanced_usage.py
+from antenna_controller import AntennaController, PositionCalibration
+from astronomic_calculator import AstronomicalCalculator
+import time
+
+# Zaawansowane funkcje z kalibracją i śledzeniem Słońca
+
+# Ustawienie kalibracji pozycji
+calibration = PositionCalibration(
+    azimuth_offset=2.0,    # Korekta azymutu
+    elevation_offset=-1.0  # Korekta elewacji
+)
+
+# Inicjalizacja kontrolera z kalibracją
+controller = AntennaController(calibration=calibration)
+controller.connect("/dev/tty.usbserial-A10PDNT7")  # lub "simulator"
+
+# Śledzenie pozycji Słońca
+calculator = AstronomicalCalculator()
+calculator.set_observer_location(52.40030228321106, 16.955077591791788, 75)  # Poznań
+
+sun_az, sun_el = calculator.calculate_sun_position()
+if sun_el > 0:
+    controller.move_to_position(sun_az, sun_el, tolerance=0.5)
+    print(f"Śledzenie Słońca: {sun_az:.1f}°, {sun_el:.1f}°")
+
+# Monitoring statusu przez 5 sekund
+for _ in range(5):
+    pos = controller.get_current_position()
+    status = controller.get_status()
+    print(f"Pozycja: {pos}, Status: {status}")
+    time.sleep(1)
+
+controller.disconnect()
+```
+
+---
 
 ## Protokół SPID
 
-System obsługuje natywnie protokół SPID (Serial Protocol Interface Device):
+System obsługuje natywnie protokół **SPID MD-01/02/03** przez **rotctl (Hamlib)**:
 
-### Komendy podstawowe
+### Komendy rotctl
 
-- **Status:** `^C2` - pobiera aktualną pozycję
-- **Ruch:** `PH180 PV045` - ustawia pozycję Az = 180°, El = 45°
-- **Stop:** `SA SE` - zatrzymuje wszystkie osie
+| Komenda rotctl | Opis | Przykład użycia |
+|----------------|------|-----------------|
+| `rotctl -m 903 -r PORT p` | Pobiera aktualną pozycję | `180.0 45.0` |
+| `rotctl -m 903 -r PORT P 180 45` | Ustawia pozycję | Az = 180°, El = 45° |
+| `rotctl -m 903 -r PORT S` | Zatrzymuje ruch | Awaryjny stop |
+| `rotctl -m 903 -r PORT --version` | Wersja hamlib | Sprawdź połączenie |
 
 ### Konfiguracja komunikacji
 
-- **Prędkość:** 115200 bps
-- **Bity danych:** 8
-- **Parzystość:** None
-- **Bity stop:** 1
-- **Kontrola przepływu:** None
+- **Model rotctl:** 903 (SPID MD-01/02/03 ROT2)
+- **Prędkość:** 115200 bps (`-s 115200`)
+- **Port:** `/dev/tty.usbserial-XXX` (`-r PORT`)
+- **Format:** 8N1 (8 bitów danych, brak parzystości, 1 bit stop)
+- **Kontrola przepływu:** Brak
+
+### Przykład pełnej komendy rotctl
+
+```bash
+# Pobierz pozycję
+rotctl -m 903 -r /dev/tty.usbserial-A10PDNT7 -s 115200 p
+
+# Ustaw pozycję na azymut 180°, elewacja 45°
+rotctl -m 903 -r /dev/tty.usbserial-A10PDNT7 -s 115200 P 180 45
+
+# Zatrzymaj ruch
+rotctl -m 903 -r /dev/tty.usbserial-A10PDNT7 -s 115200 S
+```
+
+### System współrzędnych SPID
+
+- **Azymut:** 0-360° (0° = północ, 90° = wschód)
+- **Elewacja:** 0-90° (0° = zenit, 90° = horyzont)
+- **Konwersja:** Automatyczna przez `AstronomicalCalculator`
+
+---
 
 ## Kalkulator astronomiczny
 
 ### Obsługiwane obiekty
 
-- **Słońce** — pozycja słoneczna
-- **Księżyc** — fazy i pozycja księżyca
-- **Planety** — Merkury, Wenus, Mars, Jowisz, Saturn, Neptun, Uran
-- **Gwiazdy** — katalog gwiazd jasnych
+| Kategoria | Obiekty | Sposób użycia |
+|-----------|---------|---------------|
+| **Słońce** | Sun | `AstronomicalObjectType.SUN` |
+| **Księżyc** | Moon | `AstronomicalObjectType.MOON` |
+| **Planety** | Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune | `AstronomicalObjectType.MARS`, itp. |
+| **Gwiazdy** | Katalog PyEphem (Sirius, Vega, Arcturus, Capella, itp.) | `AstronomicalObjectType.STAR` + nazwa |
+| **Obiekt własny** | Współrzędne RA/Dec | `AstronomicalObjectType.CUSTOM` + współrzędne |
 
 ### Przykład użycia
 
 ```python
-# Konfiguracja obserwatora
-location = ObserverLocation(
-    latitude=52.40030,   # Poznań
-    longitude=16.95508,
-    elevation=75,        # metery n.p.m.
-    name="Poznań"
-)
+from astronomic_calculator import AstronomicalCalculator, ObserverLocation, AstronomicalObjectType
+from datetime import datetime, timezone
 
-# Obliczenie pozycji Słońca
-calc = AstronomicalCalculator(location)
-sun_pos = calc.calculate_object_position("Sun", ObjectType.SUN)
-print(f"Słońce: Az {sun_pos.azimuth:.1f}°, El {sun_pos.elevation:.1f}°")
+# Konfiguracja obserwatora (Poznań)
+observer_location = ObserverLocation(52.40030228321106, 16.955077591791788, 75, "Poznań")
+calc = AstronomicalCalculator(observer_location)
+
+# Pozycja Słońca
+sun_position = calc.get_position(AstronomicalObjectType.SUN)
+print(f"Słońce: {sun_position.azimuth:.1f}°, {sun_position.elevation:.1f}°")
+if sun_position.is_visible:
+    antenna_pos = sun_position.to_antenna_position()
+    print(f"Pozycja SPID: Az={antenna_pos.azimuth:.1f}°, El={antenna_pos.elevation:.1f}°")
+
+# Pozycja Księżyca  
+moon_position = calc.get_position(AstronomicalObjectType.MOON)
+print(f"Księżyc: {moon_position.azimuth:.1f}°, {moon_position.elevation:.1f}°")
+
+# Pozycja planety Mars
+mars_position = calc.get_position(AstronomicalObjectType.MARS)
+print(f"Mars: {mars_position.azimuth:.1f}°, {mars_position.elevation:.1f}°")
+
+# Pozycja gwiazdy Sirius
+sirius_position = calc.get_position(AstronomicalObjectType.STAR, object_name="Sirius")
+print(f"Sirius: {sirius_position.azimuth:.1f}°, {sirius_position.elevation:.1f}°")
+
+# Czasy wschodu/zachodu Słońca
+sun_times = calc.calculate_rise_set_times(AstronomicalObjectType.SUN)
+print(f"Wschód Słońca: {sun_times.get('next_rising')}")
+print(f"Zachód Słońca: {sun_times.get('next_setting')}")
 ```
 
-## Zarządzanie kalibracją
-
-System oferuje możliwość trwałego przechowywania parametrów kalibracji anteny w plikach JSON. Pozwala to na zachowanie ustawień kalibracji między sesjami pracy.
-
-### Funkcjonalności kalibracji
-
-- **Automatyczne wczytywanie** — kalibracja jest automatycznie wczytywana podczas inicjalizacji
-- **Automatyczne zapisywanie** — opcjonalny automatyczny zapis po każdej zmianie parametrów
-- **Wiele profili** — możliwość zarządzania różnymi profilami kalibracji
-- **Kopia zapasowa** — łatwe tworzenie i przywracanie kopii zapasowych
-
-### Format pliku kalibracji
-
-Pliki kalibracji są zapisywane w formacie JSON w folderze `calibrations/`:
-
-```json
-{
-    "azimuth_inverted": false,
-    "azimuth_offset": 0.0,
-    "elevation_inverted": true, 
-    "elevation_offset": 0.0,
-    "created_at": "2025-07-23 10:30:45",
-    "version": "1.0"
-}
-```
-
-### Użycie kalibracji
-
-```python
-from antenna_controller import AntennaControllerFactory, PositionCalibration
-
-# Utworzenie kontrolera z automatycznym wczytaniem kalibracji
-controller = AntennaControllerFactory.create_spid_controller(
-    port="/dev/ttyUSB0",
-    calibration_file="calibrations/my_antenna.json"
-)
-
-# Zmiana parametrów kalibracji
-new_calibration = PositionCalibration(
-    azimuth_offset=45.0,
-    elevation_inverted=False
-)
-
-# Ustawienie z automatycznym zapisem
-controller.set_position_calibration(new_calibration, save_to_file=True)
-
-# Ręczne zarządzanie kalibracją
-controller.save_calibration("calibrations/backup.json")
-controller.load_calibration("calibrations/site_specific.json")
-controller.reset_calibration()  # Powrót do wartości domyślnych
-```
-
-### Kalibracja referencji azymutu
-
-```python
-# Kalibracja punktu referencyjnego (np. północ magnetyczna)
-controller.calibrate_azimuth_reference(
-    current_azimuth=135.0,  # Aktualna pozycja anteny
-    invert_azimuth=False,   # Czy odwrócić kierunek
-    save_to_file=True       # Automatyczny zapis
-)
-```
-
-### Dostępne metody
-
-| Metoda | Opis |
-|--------|------|
-| `save_calibration()` | Zapisuje aktualną kalibrację do pliku |
-| `load_calibration()` | Wczytuje kalibrację z pliku |
-| `reset_calibration()` | Resetuje kalibrację do wartości domyślnych |
-| `calibrate_azimuth_reference()` | Kalibruje punkt referencyjny azymutu |
-
-## System bezpieczeństwa
-
-### Limity mechaniczne
-
-- **Azymut:** 0° - 360° (konfigurowalny)
-- **Elewacja:** 0° - +90° (konfigurowalny)
-- **Prędkość:** Ograniczenia prędkości ruchu
-
-### Awaryjne zatrzymanie
-
-- **Klawisz SPACJA** — w interfejsie webowym
-- **Przycisk STOP** — w panelu sterowania
-- **Automatyczne** — przy przekroczeniu limitów
-
-### Monitoring
-
-- Ciągłe monitorowanie pozycji
-- Kontrola komunikacji z kontrolerem
-- Automatyczne wykrywanie błędów
-
-## Przykłady użycia
-
-### 1. Podstawowe sterowanie anteną
-
-```python
-from antenna_controller import AntennaControllerFactory, Position
-
-# Połączenie z anteną
-factory = AntennaControllerFactory()
-controller = factory.create_spid("/dev/ttyUSB0")
-
-# Ruch do pozycji
-controller.move_to_position(Position(180.0, 45.0))
-
-# Oczekiwanie na zakończenie ruchu
-controller.wait_for_position()
-print("Ruch zakończony")
-```
-
-### 2. Śledzenie Słońca
-
-```python
-from astronomic_calculator import AstronomicalCalculator, ObserverLocation
-from antenna_controller import AntennaControllerFactory
-
-# Konfiguracja
-location = ObserverLocation(52.40030, 16.95508, 75, "Poznań")
-calc = AstronomicalCalculator(location)
-controller = factory.create_spid("/dev/ttyUSB0")
-
-# Śledzenie Słońca
-controller.start_tracking("Sun", calc)
-print("Rozpoczęto śledzenie Słońca")
-```
-
-### 3. Użycie symulatora
-
-```python
-# Symulator do testów bez sprzętu
-controller = factory.create_simulated()
-controller.move_to_position(Position(90.0, 30.0))
-```
+---
 
 ## Rozwiązywanie problemów
 
 ### Częste problemy
 
-**Brak połączenia z portem szeregowym:**
+#### Problem: "rotctl: command not found"
 
-- Sprawdź, czy port jest podłączony
-- Użyj `GET /ports` aby zobaczyć dostępne porty
-- Sprawdź uprawnienia dostępu do portu (Linux/Mac)
+```bash
+# Sprawdź, czy rotctl jest zainstalowany
+which rotctl
 
-**Błąd "Failed to fetch":**
+# Jeśli nie - zainstaluj Hamlib
+# macOS:
+brew install hamlib
 
-- Sprawdź, czy serwer API jest uruchomiony
-- Sprawdź adres URL (domyślnie localhost:8000)
-- Sprawdź firewall i połączenie sieciowe
+# Linux (Ubuntu/Debian):
+sudo apt-get update && sudo apt-get install hamlib-utils
 
-**Problemy z pozycjonowaniem:**
-
-- Sprawdź limity mechaniczne anteny
-- Sprawdź kalibrację kontrolera SPID
-- Użyj symulatora do testów
-
-### Debugging
-
-```python
-# Włączenie szczegółowych logów
-import logging
-logging.basicConfig(level=logging.DEBUG)
-
-# Testowanie komunikacji SPID
-from antenna_controller import test_spid_communication
-test_spid_communication("/dev/ttyUSB0")
+# Windows:
+winget install hamlib
 ```
 
-### Logi systemu
+#### Problem: "Permission denied" na porcie USB
 
-Logi są dostępne:
+**Linux (Ubuntu/Debian/CentOS/RHEL/Fedora):**
+```bash
+# Dodaj użytkownika do grupy dialout
+sudo usermod -a -G dialout $USER
+# Alternatywnie dla niektórych dystrybucji:
+sudo usermod -a -G uucp $USER
 
-- W konsoli serwera API
-- W interfejsie webowym (sekcja "Log Systemu")
-- W plikach log (jeśli skonfigurowane)
+# Wyloguj się i zaloguj ponownie lub uruchom:
+newgrp dialout
+
+# Sprawdź uprawnienia portu
+ls -la /dev/ttyUSB* /dev/ttyACM*
+```
+
+**macOS:**
+```bash
+# Sprawdź uprawnienia portu
+ls -la /dev/tty.usbserial*
+
+# Jeśli problem nadal występuje, sprawdź sterowniki USB
+system_profiler SPUSBDataType | grep -A 10 "Serial"
+
+# Restart usługi USB (jeśli konieczne)
+sudo kextunload -b com.apple.driver.AppleUSBFTDI
+sudo kextload -b com.apple.driver.AppleUSBFTDI
+```
+
+**Windows:**
+```bash
+# Sprawdź dostępne porty COM w Device Manager
+# Lub w PowerShell:
+Get-WmiObject Win32_SerialPort | Select-Object Name,DeviceID
+
+# Uruchom jako Administrator jeśli problem z uprawnieniami
+# Sprawdź sterowniki USB w Device Manager
+
+# Alternatywnie w Command Prompt:
+mode
+```
+
+#### Problem: "No response from controller"
+
+1. **Sprawdź połączenia:**
+   - Kabel USB poprawnie podłączony
+   - Kontroler SPID zasilony
+   - Prawidłowy port w konfiguracji
+
+2. **Test komunikacji:**
+
+   ```bash
+   # Test bezpośredni z rotctl
+   rotctl -m 903 -r /dev/tty.usbserial-YOUR_PORT -s 115200 p
+   ```
+
+3. **Sprawdź model SPID:**
+   - MD-01: model 903
+   - MD-02: model 903  
+   - MD-03: model 903
+
+#### Problem: API serwer nie startuje
+
+```bash
+# Sprawdź port 8000
+netstat -an | grep 8000
+
+# Uruchom na innym porcie
+export PORT=8080
+python api_server/main.py
+```
+
+### Diagnostyka
+
+```bash
+# Test wszystkich komponentów
+python -c "
+import serial.tools.list_ports
+import subprocess
+import sys
+
+print('Diagnostyka systemu radioteleskop')
+print('='*50)
+
+# 1. Porty szeregowe
+print('Dostępne porty szeregowe:')
+ports = list(serial.tools.list_ports.comports())
+for port in ports:
+    print(f'  - {port.device}: {port.description}')
+
+# 2. rotctl
+try:
+    result = subprocess.run(['rotctl', '--version'], capture_output=True, text=True)
+    print(f'rotctl: {result.stdout.strip().split()[1]}')
+except FileNotFoundError:
+    print('rotctl: nie znaleziono - zainstaluj Hamlib')
+
+# 3. Python packages
+try:
+    import serial, ephem, fastapi
+    print('Python packages: wszystkie zainstalowane')
+except ImportError as e:
+    print(f'Python packages: brakuje {e.name}')
+
+print('='*50)
+"
+```
 
 ---
 
-**Projekt:** Sterownik Silnika Anteny Radioteleskopu  
-**Autor:** Aleks Czarnecki  
-**Protokół:** SPID (Serial Protocol Interface Device)  
-**Licencja:** MIT
+## Podziękowania
+
+**Autor:** Aleks Czarnecki 
+**Licencja:** MIT License  
+**Wersja:** 1.32 (2025)
+
+### Wykorzystane biblioteki
+
+- **[PyEphem](https://pyephem.readthedocs.io/)** — obliczenia astronomiczne
+- **[FastAPI](https://fastapi.tiangolo.com/)** — nowoczesny web framework
+- **[PySerial](https://pyserial.readthedocs.io/)** — komunikacja szeregowa
+- **[Hamlib](https://hamlib.github.io/)** — protokoły kontrolerów silników anten
+

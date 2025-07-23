@@ -1,14 +1,10 @@
 {
-    "azimuth_inverted": false,
     "azimuth_offset": 0.0,
-    "elevation_inverted": false,
     "elevation_offset": 0.0,
     "min_azimuth": 0.0,
     "max_azimuth": 360.0,
     "min_elevation": 0.0,
     "max_elevation": 57.0,
     "max_azimuth_speed": 10.0,
-    "max_elevation_speed": 8.0,
-    "created_at": "2025-07-23 13:13:13",
-    "version": "2.0"
+    "max_elevation_speed": 8.0
 }

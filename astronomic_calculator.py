@@ -6,6 +6,10 @@ Zaawansowany system astronomiczny wykorzystujący bibliotekę PyEphem do precyzy
 Zawiera klasy do śledzenia obiektów niebieskich, konwersji współrzędnych oraz predykcji ścieżek
 ruchu dla celów obserwacyjnych i śledzenia automatycznego.
 
+UWAGA: Współrzędne są dostosowane do protokołu rotctl (Hamlib) z SPID:
+- Azymut: 0° = północ, 90° = wschód, 180° = południe, 270° = zachód
+- Elewacja: 90° = horyzont, 0° = zenit (odwrócona oś w systemie SPID)
+
 Autor: Aleks Czarnecki
 """
 
@@ -55,10 +59,10 @@ class ObserverLocation:
 
 @dataclass
 class AstronomicalPosition:
-    """Pozycja astronomiczna obiektu"""
+    """Pozycja astronomiczna obiektu w konwencji rotctl dla SPID"""
 
-    azimuth: float  # Azymut w stopniach (0-360, 0 = północ)
-    elevation: float  # Elewacja w stopniach (0 do +90)
+    azimuth: float  # Azymut w stopniach (0-360, 0 = północ, zgodnie z rotctl)
+    elevation: float  # Elewacja w stopniach (0-90)
     distance: float  # Odległość w AU (jednostki astronomiczne)
     ra: float  # Rektascensja w godzinach
     dec: float  # Deklinacja w stopniach
@@ -66,14 +70,16 @@ class AstronomicalPosition:
     magnitude: float  # Jasność pozorna (jeśli dostępna)
 
     def to_antenna_position(self) -> Optional[Position]:
-        """Konwertuje do pozycji anteny (tylko jeśli obiekt jest widoczny)"""
+        """Konwertuje do pozycji anteny zgodnej z rotctl dla SPID (tylko jeśli obiekt jest widoczny)"""
         if not self.is_visible or self.elevation < 0:
             return None
+        rotctl_azimuth = self.azimuth
 
-        # Konwersja azymutu z astronomicznego (0 = N) na techniczny (0 = E)
-        antenna_azimuth = (90 - self.azimuth) % 360
+        # Elewacja w systemie SPID: 90° = horyzont, 0° = zenit
+        # ale PyEphem zwraca standardową elewację (0° = horyzont, 90° = zenit)
+        rotctl_elevation = 90.0 - self.elevation
 
-        return Position(azimuth=antenna_azimuth, elevation=self.elevation)
+        return Position(azimuth=rotctl_azimuth, elevation=rotctl_elevation)
 
 
 class AstronomicalCalculator:
@@ -116,18 +122,7 @@ class AstronomicalCalculator:
         star_coordinates: Optional[Tuple[float, float]] = None,
         observation_time: Optional[datetime] = None,
     ) -> AstronomicalPosition:
-        """
-        Oblicza pozycję obiektu astronomicznego
-
-        Args:
-            object_type: Typ obiektu astronomicznego
-            object_name: Nazwa obiektu (dla gwiazd)
-            star_coordinates: Współrzędne gwiazdy (RA w godzinach, Dec w stopniach)
-            observation_time: Czas obserwacji (domyślnie: teraz)
-
-        Returns:
-            Pozycja astronomiczna obiektu
-        """
+        """Oblicza pozycję obiektu astronomicznego"""
         if observation_time is None:
             observation_time = datetime.now(timezone.utc)
 
@@ -160,7 +155,9 @@ class AstronomicalCalculator:
         # Obliczenie pozycji
         astronomical_object.compute(self.observer)
 
-        # Konwersja do stopni
+        # Konwersja do stopni - PyEphem zwraca azymut w konwencji astronomicznej
+        # (0° = północ, 90° = wschód) co jest zgodne z rotctl
+        # Elewacja z PyEphem: 0° = horyzont, 90° = zenit (standardowa)
         azimuth = math.degrees(astronomical_object.az)
         elevation = math.degrees(astronomical_object.alt)
 
@@ -275,12 +272,7 @@ class AstronomicalCalculator:
         star_coordinates: Optional[Tuple[float, float]] = None,
         date: Optional[datetime] = None,
     ) -> Dict[str, Optional[datetime]]:
-        """
-        Oblicza czasy wschodu i zachodu obiektu
-
-        Returns:
-            Dict z kluczami: 'rise', 'set', 'transit'
-        """
+        """Oblicza czasy wschodu i zachodu obiektu"""
         if date is None:
             date = datetime.now(timezone.utc)
 
@@ -461,13 +453,13 @@ if __name__ == "__main__":
             antenna_pos = position.to_antenna_position()
 
             print(f"{obj_name}:")
-            print(f"  Azymut: {position.azimuth:.2f}°")
-            print(f"  Elewacja: {position.elevation:.2f}°")
+            print(f"  Azymut: {position.azimuth:.2f}° (rotctl)")
+            print(f"  Elewacja: {position.elevation:.2f}° (standardowa)")
             print(f"  Widoczny: {'Tak' if position.is_visible else 'Nie'}")
             print(f"  Jasność: {position.magnitude:.1f}m")
             if antenna_pos:
                 print(
-                    f"  Pozycja anteny: Az={antenna_pos.azimuth:.2f}°, El={antenna_pos.elevation:.2f}°"
+                    f"  Pozycja SPID: Az={antenna_pos.azimuth:.2f}°, El={antenna_pos.elevation:.2f}° (90°=horyzont)"
                 )
             print()
 
@@ -481,7 +473,7 @@ if __name__ == "__main__":
 
     if sun_position:
         print(
-            f"Słońce - pozycja anteny: Az={sun_position.azimuth:.2f}°, El={sun_position.elevation:.2f}°"
+            f"Słońce - pozycja SPID: Az={sun_position.azimuth:.2f}°, El={sun_position.elevation:.2f}° (90°=horyzont)"
         )
     else:
         print("Słońce nie jest widoczne lub jest zbyt nisko")
