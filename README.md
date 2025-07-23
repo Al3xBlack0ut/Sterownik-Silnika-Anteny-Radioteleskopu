@@ -98,9 +98,9 @@ radioteleskop/
 ### Wymagania systemowe
 
 - **Python 3.8+** (zalecane 3.11+)
-- **rotctl (Hamlib)** — biblioteka komunikacji z rotatorami
-- **Port USB/RS232** — do kontrolera SPID
-- **System operacyjny:** Linux, macOS, Windows
+- **rotctl (Hamlib)** — narzędzie do komunikacji z kontrolerem SPID
+- **Port USB/RS232** — wymagany do połączenia z kontrolerem SPID
+- **System operacyjny:** Linux/macOS/Windows
 
 ### Instalacja rotctl (Hamlib)
 
