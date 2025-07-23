@@ -221,7 +221,7 @@ Domyślny port: """ + DEFAULT_PORT
         print("AWARYJNY STOP ANTENY RADIOTELESKOPU")
         print("=" * 50)
         print(f"Port: {args.port}")
-        print(f"Protokół: SPID")
+        print("Protokół: SPID")
         print("=" * 50)
 
     try:

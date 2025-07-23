@@ -9,23 +9,25 @@ długotrwałymi sesjami obserwacyjnymi z uwzględnieniem limitów mechanicznych 
 Autor: Aleks Czarnecki
 """
 
+import os
+import sys
 import time
-import threading
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Optional, Callable
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from antenna_controller import (
-    AntennaControllerFactory, AntennaController, SPIDMotorDriver,
-    SimulatedMotorDriver, Position, AntennaError, MotorConfig, AntennaLimits,
-    auto_detect_spid_ports, find_working_spid_port, AntennaState
+    AntennaControllerFactory, Position, MotorConfig, AntennaLimits,
+    AntennaState, DEFAULT_SPID_PORT
 )
 
 from astronomic_calculator import (
-    AstronomicalCalculator, AstronomicalTracker, ObserverLocation,
-    AstronomicalObjectType, AstronomicalPosition, OBSERVATORIES
+    AstronomicalCalculator, AstronomicalObjectType, OBSERVATORIES
 )
+
+# Dodanie wyjątku SafetyError dla przypadku przekroczenia limitów
+class SafetyError(Exception):
+    """Wyjątek związany z bezpieczeństwem anteny"""
 
 
 # =============================================================================
@@ -69,13 +71,15 @@ def track_sun_realtime():
 
     # Klasa pomocnicza do śledzenia
     class SunTrackingMonitor:
+        """Klasa do monitorowania śledzenia Słońca"""
         def __init__(self):
             self.tracking = False
             self.current_sun_position = None
             self.path_history = []
             self.start_time = datetime.now()
 
-        def position_callback(self, position: Position, state: AntennaState):
+        def position_callback(self, position: Position, _state: AntennaState):
+            """Callback wywoływany przy aktualizacji pozycji"""
             elapsed = (datetime.now() - self.start_time).total_seconds()
             if self.current_sun_position:
                 print(f"[{elapsed:6.1f}s] "
@@ -126,7 +130,7 @@ def track_sun_realtime():
                 # Pokaż czas wschodu/zachodu
                 if len(monitor.path_history) <= 1:  # Tylko raz na początku
                     sun_times = calculator.calculate_rise_set_times(AstronomicalObjectType.SUN)
-                    print(f"\nSłońce dzisiaj:")
+                    print("\nSłońce dzisiaj:")
                     for event, time_val in sun_times.items():
                         if time_val:
                             print(f"  {event}: {time_val.strftime('%H:%M:%S')}")
@@ -235,7 +239,8 @@ def track_sun_with_prediction():
     start_time = None
 
     # Funkcja monitorująca postęp śledzenia
-    def tracking_callback(position: Position, state: AntennaState):
+    def tracking_callback(position: Position, _state: AntennaState):
+        """Callback do monitorowania postępu śledzenia"""
         nonlocal start_time
         if start_time is None:
             return

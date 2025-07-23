@@ -8,20 +8,15 @@ Autor: Aleks Czarnecki
 """
 
 import time
-import threading
-import json
-import math
 import os
 import sys
 from datetime import datetime
-from typing import List, Callable, Optional
-
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from antenna_controller import (
     AntennaControllerFactory, Position, MotorConfig, AntennaLimits,
-    AntennaState, AntennaError, SafetyError,DEFAULT_SPID_PORT
+    AntennaState
 )
 
 
@@ -207,7 +202,7 @@ def grid_sky_scan():
 
     # Parametry skanowania
     az_start, az_end, az_step = 0, 360, 30  # Co 30° w azymucie
-    el_start, el_end, el_step = 10, 80, 20  # Co 20° w elewacji
+    el_start, el_end, el_step = 0, 90, 10  # Co 20° w elewacji
 
     # Generowanie siatki pozycji
     scan_positions = []
