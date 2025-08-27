@@ -759,7 +759,7 @@ print('='*50)
 
 ### Wykorzystane biblioteki
 
-- **[PyEphem](https://pyephem.readthedocs.io/)** — obliczenia astronomiczne
+- **[PyEphem](http://rhodesmill.org/pyephem/)** — obliczenia astronomiczne
 - **[FastAPI](https://fastapi.tiangolo.com/)** — nowoczesny web framework
 - **[PySerial](https://pyserial.readthedocs.io/)** — komunikacja szeregowa
 - **[Hamlib](https://hamlib.github.io/)** — protokoły kontrolerów silników anten

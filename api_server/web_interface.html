@@ -528,29 +528,29 @@
                         <div class="control-group">
                             <label>Wybierz obiekt:</label>
                             <div class="astronomical-objects">
-                                <div class="object-button" onclick="selectAstronomicalObject('sun', 'SUN')">Słońce</div>
-                                <div class="object-button" onclick="selectAstronomicalObject('moon', 'MOON')">Księżyc</div>
-                                <div class="object-button" onclick="selectAstronomicalObject('mercury', 'PLANET')">Merkury</div>
-                                <div class="object-button" onclick="selectAstronomicalObject('venus', 'PLANET')">Wenus</div>
-                                <div class="object-button" onclick="selectAstronomicalObject('mars', 'PLANET')">Mars</div>
-                                <div class="object-button" onclick="selectAstronomicalObject('jupiter', 'PLANET')">Jowisz</div>
-                                <div class="object-button" onclick="selectAstronomicalObject('saturn', 'PLANET')">Saturn</div>
-                                <div class="object-button" onclick="selectAstronomicalObject('uranus', 'PLANET')">Uran</div>
-                                <div class="object-button" onclick="selectAstronomicalObject('neptune', 'PLANET')">Neptun</div>
+                                <div class="object-button" onclick="selectAstronomicalObject('sun', 'sun')">Słońce</div>
+                                <div class="object-button" onclick="selectAstronomicalObject('moon', 'moon')">Księżyc</div>
+                                <div class="object-button" onclick="selectAstronomicalObject('mercury', 'mercury')">Merkury</div>
+                                <div class="object-button" onclick="selectAstronomicalObject('venus', 'venus')">Wenus</div>
+                                <div class="object-button" onclick="selectAstronomicalObject('mars', 'mars')">Mars</div>
+                                <div class="object-button" onclick="selectAstronomicalObject('jupiter', 'jupiter')">Jowisz</div>
+                                <div class="object-button" onclick="selectAstronomicalObject('saturn', 'saturn')">Saturn</div>
+                                <div class="object-button" onclick="selectAstronomicalObject('uranus', 'uranus')">Uran</div>
+                                <div class="object-button" onclick="selectAstronomicalObject('neptune', 'neptune')">Neptun</div>
                             </div>
                         </div>
 
                         <div class="control-group">
                             <label>Popularne gwiazdy:</label>
                             <div class="astronomical-objects">
-                                <div class="object-button star-button" onclick="selectAstronomicalObject('Vega', 'STAR')">Vega</div>
-                                <div class="object-button star-button" onclick="selectAstronomicalObject('Sirius', 'STAR')">Syriusz</div>
-                                <div class="object-button star-button" onclick="selectAstronomicalObject('Polaris', 'STAR')">Gwiazda Polarna</div>
-                                <div class="object-button star-button" onclick="selectAstronomicalObject('Betelgeuse', 'STAR')">Betelgeza</div>
-                                <div class="object-button star-button" onclick="selectAstronomicalObject('Rigel', 'STAR')">Rigel</div>
-                                <div class="object-button star-button" onclick="selectAstronomicalObject('Altair', 'STAR')">Altair</div>
-                                <div class="object-button star-button" onclick="selectAstronomicalObject('Deneb', 'STAR')">Deneb</div>
-                                <div class="object-button star-button" onclick="selectAstronomicalObject('Antares', 'STAR')">Antares</div>
+                                <div class="object-button star-button" onclick="selectAstronomicalObject('Vega', 'star')">Vega</div>
+                                <div class="object-button star-button" onclick="selectAstronomicalObject('Sirius', 'star')">Syriusz</div>
+                                <div class="object-button star-button" onclick="selectAstronomicalObject('Polaris', 'star')">Gwiazda Polarna</div>
+                                <div class="object-button star-button" onclick="selectAstronomicalObject('Betelgeuse', 'star')">Betelgeza</div>
+                                <div class="object-button star-button" onclick="selectAstronomicalObject('Rigel', 'star')">Rigel</div>
+                                <div class="object-button star-button" onclick="selectAstronomicalObject('Altair', 'star')">Altair</div>
+                                <div class="object-button star-button" onclick="selectAstronomicalObject('Deneb', 'star')">Deneb</div>
+                                <div class="object-button star-button" onclick="selectAstronomicalObject('Antares', 'star')">Antares</div>
                             </div>
                         </div>
 
@@ -563,10 +563,16 @@
                         <div class="control-group" style="display: none;">
                             <label>Typ obiektu:</label>
                             <select id="objectTypeSelect">
-                                <option value="STAR">Gwiazda</option>
-                                <option value="PLANET">Planeta</option>
-                                <option value="MOON">Księżyc</option>
-                                <option value="SUN">Słońce</option>
+                                <option value="star">Gwiazda</option>
+                                <option value="mercury">Merkury</option>
+                                <option value="venus">Wenus</option>
+                                <option value="mars">Mars</option>
+                                <option value="jupiter">Jowisz</option>
+                                <option value="saturn">Saturn</option>
+                                <option value="uranus">Uran</option>
+                                <option value="neptune">Neptun</option>
+                                <option value="moon">Księżyc</option>
+                                <option value="sun">Słońce</option>
                             </select>
                         </div>
 
@@ -1086,8 +1092,15 @@
                     return;
                 }
 
-                const response = await apiCall(`/track/${objectName}?object_type=${objectType}`, 'POST');
-                log(`Rozpoczęto śledzenie: ${objectName}`, 'success');
+                // Użyj nowego endpointu /start_tracking z TrackingConfigModel
+                const trackingConfig = {
+                    object_name: objectName,
+                    object_type: objectType,
+                    min_elevation: 10.0,
+                    update_interval: 1.0,
+                    precision: 0.5
+                };                const response = await apiCall('/start_tracking', 'POST', trackingConfig);
+                log(`Rozpoczęto ciągłe śledzenie: ${objectName}`, 'success');
 
             } catch (error) {
                 log('Błąd rozpoczynania śledzenia', 'error');

@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 import logging
 import os
 import sys
+import asyncio
 
 # Import z głównego folderu
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,7 +25,7 @@ from antenna_controller import (
     AntennaState, PositionCalibration, DEFAULT_SPID_PORT
 )
 from astronomic_calculator import (
-    AstronomicalCalculator, ObserverLocation, AstronomicalObjectType
+    AstronomicalCalculator, ObserverLocation, AstronomicalObjectType, AstronomicalTracker
 )
 
 # Konfiguracja logowania
@@ -35,6 +36,9 @@ logger = logging.getLogger(__name__)
 antenna_controller: Optional[AntennaController] = None
 astro_calculator: Optional[AstronomicalCalculator] = None
 current_observer_location: Optional[ObserverLocation] = None
+astro_tracker: Optional[AstronomicalTracker] = None
+tracking_active: bool = False
+tracking_task: Optional[asyncio.Task] = None
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -43,8 +47,14 @@ async def lifespan(_app: FastAPI):
     logger.info("Uruchamianie API radioteleskopa...")
     yield
     # Shutdown
-    global antenna_controller
+    global antenna_controller, tracking_active, tracking_task
     logger.info("Zamykanie API...")
+
+    # Zatrzymaj śledzenie
+    if tracking_active:
+        tracking_active = False
+        if tracking_task and not tracking_task.done():
+            tracking_task.cancel()
 
     if antenna_controller:
         try:
@@ -127,6 +137,14 @@ class AxisMoveModel(BaseModel):
     direction: str = Field(..., description="Kierunek: 'positive' lub 'negative'")
     amount: float = Field(1.0, description="Wielkość ruchu w stopniach")
 
+class TrackingConfigModel(BaseModel):
+    """Model konfiguracji śledzenia"""
+    object_name: str = Field(..., description="Nazwa obiektu astronomicznego")
+    object_type: AstronomicalObjectType = Field(..., description="Typ obiektu")
+    min_elevation: float = Field(10.0, description="Minimalna elewacja w stopniach")
+    update_interval: float = Field(1.0, description="Interwał aktualizacji w sekundach")
+    precision: float = Field(0.5, description="Dokładność pozycjonowania w stopniach")
+
 # Pomocnicze funkcje
 def get_antenna_controller() -> AntennaController:
     """Pobiera kontroler anteny lub rzuca wyjątek HTTP jeśli nie jest zainicjalizowany"""
@@ -141,6 +159,60 @@ def get_astro_calculator() -> AstronomicalCalculator:
     if astro_calculator is None or current_observer_location is None:
         raise HTTPException(status_code=503, detail="Kalkulator astronomiczny nie jest skonfigurowany. Ustaw lokalizację obserwatora")
     return astro_calculator
+
+def get_astro_tracker() -> AstronomicalTracker:
+    """Pobiera tracker astronomiczny lub rzuca wyjątek HTTP jeśli nie jest skonfigurowany"""
+    global astro_tracker
+    if astro_tracker is None:
+        raise HTTPException(status_code=503, detail="Tracker astronomiczny nie jest skonfigurowany. Ustaw lokalizację obserwatora")
+    return astro_tracker
+
+async def continuous_tracking_task(tracking_config: TrackingConfigModel):
+    """Zadanie ciągłego śledzenia obiektu astronomicznego"""
+    global tracking_active, antenna_controller
+    
+    logger.info(f"Rozpoczęcie ciągłego śledzenia obiektu: {tracking_config.object_name}")
+    
+    try:
+        tracker = get_astro_tracker()
+        controller = get_antenna_controller()
+        
+        # Utwórz funkcję śledzenia dla określonego obiektu
+        if tracking_config.object_name.lower() == "sun":
+            track_function = tracker.track_sun(min_elevation=tracking_config.min_elevation)
+        elif tracking_config.object_name.lower() == "moon":
+            track_function = tracker.track_moon(min_elevation=tracking_config.min_elevation)
+        else:
+            # Dla innych obiektów używamy trackingu ogólnego
+            raise HTTPException(status_code=400, detail=f"Obiekt '{tracking_config.object_name}' nie jest obsługiwany")
+        
+        while tracking_active:
+            try:
+                # Pobierz aktualną pozycję obiektu
+                target_position = track_function()
+                
+                if target_position is None:
+                    logger.warning(f"Obiekt {tracking_config.object_name} jest poza zasięgiem")
+                    break
+                
+                logger.info(f"Śledzenie {tracking_config.object_name}: Az={target_position.azimuth:.2f}°, El={target_position.elevation:.2f}°")
+                
+                # Po prostu przesuń antenę do nowej pozycji co określony czas
+                controller.move_to(target_position)
+                logger.info(f"Przesunięto antenę do pozycji: Az={target_position.azimuth:.2f}°, El={target_position.elevation:.2f}°")
+                
+                # Czekaj przez określony interwał
+                await asyncio.sleep(tracking_config.update_interval)
+                
+            except Exception as e:
+                logger.error(f"Błąd podczas śledzenia: {e}")
+                await asyncio.sleep(5)  # Krótsza pauza przy błędzie
+                
+    except Exception as e:
+        logger.error(f"Krytyczny błąd śledzenia: {e}")
+    finally:
+        tracking_active = False
+        logger.info(f"Zakończono śledzenie obiektu: {tracking_config.object_name}")
 
 # Endpointy API
 
@@ -310,7 +382,7 @@ async def stop_antenna():
 @app.post("/observer", summary="Ustaw lokalizację obserwatora")
 async def set_observer_location(location: ObserverLocationModel):
     """Ustaw lokalizację obserwatora dla obliczeń astronomicznych"""
-    global astro_calculator, current_observer_location
+    global astro_calculator, current_observer_location, astro_tracker
 
     try:
         current_observer_location = ObserverLocation(
@@ -321,6 +393,7 @@ async def set_observer_location(location: ObserverLocationModel):
         )
 
         astro_calculator = AstronomicalCalculator(current_observer_location)
+        astro_tracker = AstronomicalTracker(astro_calculator)
 
         logger.info(f"Ustawiono lokalizację obserwatora: {location.name}")
         return {"status": "set", "location": location.model_dump()}
@@ -384,19 +457,69 @@ async def track_object(object_name: str, object_type: AstronomicalObjectType = A
         logger.error(f"Błąd pozycjonowania na obiekt: {e}")
         raise HTTPException(status_code=500, detail=f"Błąd pozycjonowania na obiekt: {str(e)}")
 
+@app.post("/start_tracking", summary="Rozpocznij ciągłe śledzenie obiektu")
+async def start_tracking(config: TrackingConfigModel):
+    """Rozpocznij ciągłe śledzenie obiektu astronomicznego"""
+    global tracking_active, tracking_task
+    
+    if tracking_active:
+        raise HTTPException(status_code=400, detail="Śledzenie już jest aktywne. Zatrzymaj je najpierw.")
+    
+    try:
+        # Sprawdź dostępność wymaganych komponentów
+        get_antenna_controller()
+        get_astro_tracker()
+        
+        tracking_active = True
+        tracking_task = asyncio.create_task(continuous_tracking_task(config))
+        
+        logger.info(f"Rozpoczęto ciągłe śledzenie obiektu: {config.object_name}")
+        return {
+            "status": "tracking_started",
+            "object": config.object_name,
+            "type": config.object_type.value,
+            "config": config.model_dump()
+        }
+        
+    except Exception as e:
+        tracking_active = False
+        logger.error(f"Błąd rozpoczęcia śledzenia: {e}")
+        raise HTTPException(status_code=500, detail=f"Błąd rozpoczęcia śledzenia: {str(e)}")
+
 @app.post("/stop_tracking", summary="Zatrzymaj śledzenie")
 async def stop_tracking():
     """Zatrzymaj śledzenie obiektu"""
-    controller = get_antenna_controller()
-
+    global tracking_active, tracking_task
+    
     try:
+        if tracking_active:
+            tracking_active = False
+            if tracking_task and not tracking_task.done():
+                tracking_task.cancel()
+                try:
+                    await tracking_task
+                except asyncio.CancelledError:
+                    pass
+            tracking_task = None
+            
+        # Zatrzymaj też antenę
+        controller = get_antenna_controller()
         controller.stop()
+        
         logger.info("Zatrzymano śledzenie")
         return {"status": "tracking_stopped"}
 
     except Exception as e:
         logger.error(f"Błąd zatrzymywania śledzenia: {e}")
         raise HTTPException(status_code=500, detail=f"Błąd zatrzymywania śledzenia: {str(e)}")
+
+@app.get("/tracking_status", summary="Status śledzenia")
+async def get_tracking_status():
+    """Pobierz aktualny status śledzenia"""
+    return {
+        "tracking_active": tracking_active,
+        "task_running": tracking_task is not None and not tracking_task.done() if tracking_task else False
+    }
 
 @app.get("/ports", summary="Lista dostępnych portów")
 async def list_ports():

@@ -157,7 +157,7 @@ def get_best_spid_port(preferred_port: Optional[str] = None) -> str:
 
 
 # =============================================================================
-# FUNKCJE ROTCTL (HAMLIB) - NOWY SPOSÓB KOMUNIKACJI Z SPID
+# FUNKCJE ROTCTL (HAMLIB) -  SPOSÓB KOMUNIKACJI Z SPID
 # =============================================================================
 
 

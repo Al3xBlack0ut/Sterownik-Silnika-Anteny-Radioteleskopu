@@ -13,6 +13,12 @@ import sys
 import unittest
 import time
 import logging
+import os
+
+# Dodaj ścieżkę do głównego folderu projektu
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from antenna_controller import PositionCalibration, DEFAULT_CALIBRATION_FILE
 
 # Konfiguracja logowania
 logging.basicConfig(
@@ -24,8 +30,18 @@ logger = logging.getLogger(__name__)
 # Domyślny port SPID
 DEFAULT_SPID_PORT = "/dev/tty.usbserial-A10PDNT7"
 
-def ustaw_pozycje(port: str, az: float, el: float, speed: int = 115200):
+def ustaw_pozycje(port: str, az: float, el: float, speed: int = 115200, apply_calibration: bool = True):
     """Ustawia pozycję rotatora SPID MD-03 za pomocą rotctl (Hamlib)"""
+    
+    # Zastosuj offset kalibracji jeśli włączony
+    if apply_calibration:
+        try:
+            calibration = wczytaj_kalibracje()
+            az, el = zastosuj_offset_kalibracji(az, el, calibration)
+            logger.debug(f"Pozycja po aplikacji offsetu: Az={az:.1f}°, El={el:.1f}°")
+        except Exception as e:
+            logger.warning(f"Nie można zastosować kalibracji: {e}")
+    
     komenda = f"P {az % 360:.1f} {el:.1f}\n"
 
     proc = subprocess.Popen(
@@ -43,10 +59,10 @@ def ustaw_pozycje(port: str, az: float, el: float, speed: int = 115200):
 
     return stdout.strip()
 
-def odczytaj_pozycje(port: str, speed: int = 115200):
+def odczytaj_pozycje(port: str, speed: int = 115200, apply_calibration: bool = True):
     """
     Odczytuje aktualną pozycję rotatora SPID.
-    Zwraca tuple (azymut, elewacja) w stopniach.
+    Zwraca tuple (azymut, elewacja) w stopniach z uwzględnieniem offsetów kalibracji.
     """
     proc = subprocess.Popen(
         ['rotctl', '-m', '903', '-r', port, '-s', str(speed), '-'],
@@ -77,14 +93,42 @@ def odczytaj_pozycje(port: str, speed: int = 115200):
                         continue
 
     if len(values) >= 2:
-        return values[0], values[1]
+        raw_az, raw_el = values[0], values[1]
+        
+        # Zastosuj kompensację offsetu kalibracji jeśli włączona
+        if apply_calibration:
+            try:
+                calibration = wczytaj_kalibracje()
+                # Odejmij offsety żeby uzyskać rzeczywistą pozycję
+                compensated_az = (raw_az - calibration.azimuth_offset) % 360
+                compensated_el = raw_el - calibration.elevation_offset
+                logger.debug(f"Pozycja surowa: Az={raw_az:.1f}°, El={raw_el:.1f}°")
+                logger.debug(f"Pozycja po kompensacji: Az={compensated_az:.1f}°, El={compensated_el:.1f}°")
+                return compensated_az, compensated_el
+            except Exception as e:
+                logger.warning(f"Nie można zastosować kompensacji kalibracji: {e}")
+        
+        return raw_az, raw_el
     else:
         # Alternatywne parsowanie - spróbuj wyciągnąć liczby z całego tekstu
         import re
         numbers = re.findall(r'[-+]?\d*\.?\d+', stdout)
         if len(numbers) >= 2:
             try:
-                return float(numbers[0]), float(numbers[1])
+                raw_az, raw_el = float(numbers[0]), float(numbers[1])
+                
+                # Zastosuj kompensację offsetu kalibracji jeśli włączona
+                if apply_calibration:
+                    try:
+                        calibration = wczytaj_kalibracje()
+                        # Odejmij offsety żeby uzyskać rzeczywistą pozycję
+                        compensated_az = (raw_az - calibration.azimuth_offset) % 360
+                        compensated_el = raw_el - calibration.elevation_offset
+                        return compensated_az, compensated_el
+                    except Exception as e:
+                        logger.warning(f"Nie można zastosować kompensacji kalibracji: {e}")
+                
+                return raw_az, raw_el
             except ValueError:
                 pass
 
@@ -168,6 +212,29 @@ def sprawdz_pozycje(port: str, target_az: float, target_el: float, tolerance: fl
         return False, 0.0, 0.0, max_attempts
 
 
+def wczytaj_kalibracje(calibration_file=None):
+    """Wczytuje kalibrację z pliku"""
+    file_path = calibration_file or DEFAULT_CALIBRATION_FILE
+    try:
+        calibration = PositionCalibration.load_from_file(file_path)
+        logger.info(f"Kalibracja wczytana z {file_path}: az_offset={calibration.azimuth_offset:.1f}°, el_offset={calibration.elevation_offset:.1f}°")
+        return calibration
+    except Exception as e:
+        logger.warning(f"Nie można wczytać kalibracji z {file_path}: {e}. Używam wartości domyślnych.")
+        return PositionCalibration()
+
+
+def zastosuj_offset_kalibracji(az: float, el: float, calibration: PositionCalibration):
+    """Stosuje offset kalibracji do pozycji"""
+    calibrated_az = (az + calibration.azimuth_offset) % 360
+    calibrated_el = el + calibration.elevation_offset
+    
+    # Ogranicz elewację do sensownego zakresu
+    calibrated_el = max(calibration.min_elevation, min(calibration.max_elevation, calibrated_el))
+    
+    return calibrated_az, calibrated_el
+
+
 class SPIDProtocolTests(unittest.TestCase):
     """Testy protokołu komunikacji SPID z użyciem Hamlib"""
 
@@ -190,6 +257,9 @@ class SPIDProtocolTests(unittest.TestCase):
         """Przygotowanie do każdego testu."""
         logger.info("-" * 60)
         logger.info(f"Rozpoczęcie testu: {self._testMethodName}")
+        
+        # Wczytaj kalibrację
+        self.calibration = wczytaj_kalibracje()
 
     def tearDown(self):
         """Sprzątanie po każdym teście."""
@@ -329,30 +399,49 @@ class SPIDProtocolTests(unittest.TestCase):
             self.fail(f"Błąd podczas wykonywania komendy STOP: {e}")
 
     def test_06_boundary_positions(self):
-        """Test pozycji granicznych (bezpiecznych)."""
-        logger.info("Test pozycji granicznych")
+        """Test pozycji granicznych z kalibracją."""
+        logger.info("Test pozycji granicznych z kalibracją")
 
-        # Testuj tylko bezpieczne pozycje graniczne
-        safe_positions = [
-            (0.0, 0.0),
-            (90.0, -50.0),
-            (180.0, 0.0),
-            (270.0, 0.0),
-            (0.0, 20.0),
-            (50.0, 50.0),
+        # Użyj limitów z kalibracji do definiowania bezpiecznych pozycji
+        min_az = self.calibration.min_azimuth
+        max_az = self.calibration.max_azimuth
+        min_el = self.calibration.min_elevation
+        max_el = self.calibration.max_elevation
+        
+        logger.info(f"Limity z kalibracji: Az({min_az:.1f}°-{max_az:.1f}°), El({min_el:.1f}°-{max_el:.1f}°)")
+
+        # Bezpieczne pozycje testowe (przed zastosowaniem offsetu)
+        test_positions = [
+            (0.0, 10.0),    # Pozycja startowa
+            (90.0, 20.0),   # Wschód
+            (180.0, 15.0),  # Południe  
+            (270.0, 10.0),  # Zachód
+            (45.0, max_el - 5.0),   # Prawie maksymalna elewacja
+            (0.0, min_el + 5.0),    # Prawie minimalna elewacja
         ]
 
-        for az, el in safe_positions:
+        for az, el in test_positions:
             with self.subTest(az=az, el=el):
                 try:
-                    logger.info(f"Test pozycji Az={az}°, El={el}°")
-                    ustaw_pozycje(self.PORT, az=az, el=el, speed=self.BAUDRATE)
+                    # Zastosuj offset kalibracji
+                    calibrated_az, calibrated_el = zastosuj_offset_kalibracji(az, el, self.calibration)
+                    
+                    logger.info(f"Test pozycji Az={az:.1f}°→{calibrated_az:.1f}°, El={el:.1f}°→{calibrated_el:.1f}°")
+                    
+                    # Sprawdź czy pozycja po kalibracji jest w bezpiecznych limitach
+                    if (calibrated_el < min_el or calibrated_el > max_el or 
+                        calibrated_az < min_az or calibrated_az >= max_az):
+                        logger.warning(f"Pozycja po kalibracji poza limitami ({calibrated_az:.1f}°, {calibrated_el:.1f}°), pomijam test")
+                        continue
+                    
+                    # Wykonaj ruch do pozycji skalibrowanej (nie stosuj offsetu ponownie)
+                    ustaw_pozycje(self.PORT, az=calibrated_az, el=calibrated_el, speed=self.BAUDRATE, apply_calibration=False)
 
                     # Krótka pauza
                     time.sleep(1.5)
 
-                    # Sprawdź czy komenda została przyjęta
-                    current_az, current_el = odczytaj_pozycje(self.PORT, self.BAUDRATE)
+                    # Sprawdź czy komenda została przyjęta (nie stosuj kompensacji ponownie)
+                    current_az, current_el = odczytaj_pozycje(self.PORT, self.BAUDRATE, apply_calibration=False)
                     logger.info(f"Pozycja po komendzie: Az={current_az:.1f}°, El={current_el:.1f}°")
 
                 except Exception as e:

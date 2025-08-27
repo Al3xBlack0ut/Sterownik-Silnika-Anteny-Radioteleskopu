@@ -40,7 +40,7 @@ if __name__ == "__main__":
     port = sys.argv[1] if len(sys.argv)>1 else '/dev/tty.usbserial-A10PDNT7'
     print("Pozycja startowa:")
     print(odczytaj_pozycje(port))
-    ustaw_pozycje(port, az=274-180, el=30)
+    ustaw_pozycje(port, az=125, el=60)
     time.sleep(20)
     print("Ustawiono. Teraz odczytuję pozycję:")
     print(odczytaj_pozycje(port))

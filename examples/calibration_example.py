@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Przykład użycia funkcji zapisywania i odczytywania kalibracji anteny
+Przykład użycia zapisywania i odczytywania kalibracji anteny
 
 Ten skrypt demonstruje jak używać nowych funkcji zarządzania kalibracją
 w systemie sterowania anteną radioteleskopu.
@@ -44,19 +44,21 @@ def demonstrate_calibration_management():
     # Wyświetl aktualną kalibrację
     current_cal = controller.position_calibration
     print("   Aktualna kalibracja:")
-    print(f"     - Azymut odwrócony: {current_cal.azimuth_inverted}")
     print(f"     - Offset azymutu: {current_cal.azimuth_offset:.2f}°")
-    print(f"     - Elewacja odwrócona: {current_cal.elevation_inverted}")  
     print(f"     - Offset elewacji: {current_cal.elevation_offset:.2f}°")
+    print(f"     - Limity azymutu: {current_cal.min_azimuth:.1f}° - {current_cal.max_azimuth:.1f}°")
+    print(f"     - Limity elewacji: {current_cal.min_elevation:.1f}° - {current_cal.max_elevation:.1f}°")
     print()
     
     # 2. Ustawienie własnej kalibracji
     print("2. Ustawienie własnej kalibracji...")
     custom_calibration = PositionCalibration(
-        azimuth_inverted=True,
         azimuth_offset=45.0,
-        elevation_inverted=False,
-        elevation_offset=-10.0
+        elevation_offset=-10.0,
+        min_azimuth=0.0,
+        max_azimuth=360.0,
+        min_elevation=0.0,
+        max_elevation=57.0
     )
     
     controller.set_position_calibration(custom_calibration, save_to_file=True)
@@ -97,10 +99,10 @@ def demonstrate_calibration_management():
     
     reset_cal = controller.position_calibration
     print("   Kalibracja po resecie:")
-    print(f"     - Azymut odwrócony: {reset_cal.azimuth_inverted}")
     print(f"     - Offset azymutu: {reset_cal.azimuth_offset:.2f}°")
-    print(f"     - Elewacja odwrócona: {reset_cal.elevation_inverted}")
     print(f"     - Offset elewacji: {reset_cal.elevation_offset:.2f}°")
+    print(f"     - Limity azymutu: {reset_cal.min_azimuth:.1f}° - {reset_cal.max_azimuth:.1f}°")
+    print(f"     - Limity elewacji: {reset_cal.min_elevation:.1f}° - {reset_cal.max_elevation:.1f}°")
     print()
     
     # 6. Wczytanie kalibracji z pliku
@@ -108,10 +110,12 @@ def demonstrate_calibration_management():
     
     # Najpierw ustawmy jakąś kalibrację i zapiszmy
     test_cal = PositionCalibration(
-        azimuth_inverted=False,
         azimuth_offset=30.0,
-        elevation_inverted=True,
-        elevation_offset=5.0
+        elevation_offset=5.0,
+        min_azimuth=0.0,
+        max_azimuth=360.0,
+        min_elevation=0.0,
+        max_elevation=57.0
     )
     
     test_cal.save_to_file("calibrations/test_calibration.json")
@@ -121,10 +125,10 @@ def demonstrate_calibration_management():
     controller.load_calibration("calibrations/test_calibration.json")
     loaded_cal = controller.position_calibration
     print("   Wczytana kalibracja:")
-    print(f"     - Azymut odwrócony: {loaded_cal.azimuth_inverted}")
     print(f"     - Offset azymutu: {loaded_cal.azimuth_offset:.2f}°")
-    print(f"     - Elewacja odwrócona: {loaded_cal.elevation_inverted}")
     print(f"     - Offset elewacji: {loaded_cal.elevation_offset:.2f}°")
+    print(f"     - Limity azymutu: {loaded_cal.min_azimuth:.1f}° - {loaded_cal.max_azimuth:.1f}°")
+    print(f"     - Limity elewacji: {loaded_cal.min_elevation:.1f}° - {loaded_cal.max_elevation:.1f}°")
     print()
     
     # 7. Status z informacjami o kalibracji
@@ -141,8 +145,8 @@ def demonstrate_calibration_management():
     print(f"   Eksport do słownika: {cal_dict}")
     
     # Modyfikuj słownik
-    cal_dict['azimuth_offset'] = 60.0
-    cal_dict['elevation_inverted'] = False
+    cal_dict['azimuth_offset'] = 30.0  # Bezpieczna wartość zamiast 60.0
+    cal_dict['elevation_offset'] = 5.0
     
     # Import ze słownika
     imported_cal = PositionCalibration.import_from_dict(cal_dict)
@@ -161,10 +165,12 @@ def show_calibration_file_format():
     
     # Utwórz przykładową kalibrację
     example_cal = PositionCalibration(
-        azimuth_inverted=True,
         azimuth_offset=45.5,
-        elevation_inverted=False,
-        elevation_offset=-12.3
+        elevation_offset=-12.3,
+        min_azimuth=0.0,
+        max_azimuth=360.0,
+        min_elevation=0.0,
+        max_elevation=57.0
     )
     
     # Zapisz do pliku

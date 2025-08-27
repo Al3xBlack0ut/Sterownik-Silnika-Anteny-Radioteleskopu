@@ -35,10 +35,14 @@ class TestCalibrationPersistence(unittest.TestCase):
         """Test zapisywania i wczytywania kalibracji"""
         # Utwórz testową kalibrację
         original = PositionCalibration(
-            azimuth_inverted=True,
             azimuth_offset=45.5,
-            elevation_inverted=False,
-            elevation_offset=-12.3
+            elevation_offset=-12.3,
+            min_azimuth=0.0,
+            max_azimuth=360.0,
+            min_elevation=0.0,
+            max_elevation=90.0,
+            max_azimuth_speed=10.0,
+            max_elevation_speed=8.0
         )
 
         # Zapisz do pliku
@@ -49,10 +53,14 @@ class TestCalibrationPersistence(unittest.TestCase):
         loaded = PositionCalibration.load_from_file(self.test_file)
 
         # Sprawdź czy wartości są identyczne
-        self.assertEqual(original.azimuth_inverted, loaded.azimuth_inverted)
         self.assertAlmostEqual(original.azimuth_offset, loaded.azimuth_offset, places=1)
-        self.assertEqual(original.elevation_inverted, loaded.elevation_inverted)
         self.assertAlmostEqual(original.elevation_offset, loaded.elevation_offset, places=1)
+        self.assertAlmostEqual(original.min_azimuth, loaded.min_azimuth, places=1)
+        self.assertAlmostEqual(original.max_azimuth, loaded.max_azimuth, places=1)
+        self.assertAlmostEqual(original.min_elevation, loaded.min_elevation, places=1)
+        self.assertAlmostEqual(original.max_elevation, loaded.max_elevation, places=1)
+        self.assertAlmostEqual(original.max_azimuth_speed, loaded.max_azimuth_speed, places=1)
+        self.assertAlmostEqual(original.max_elevation_speed, loaded.max_elevation_speed, places=1)
 
     def test_load_nonexistent_file(self):
         """Test wczytywania nieistniejącego pliku (powinna zwrócić domyślną kalibrację)"""
@@ -62,10 +70,12 @@ class TestCalibrationPersistence(unittest.TestCase):
         calibration = PositionCalibration.load_from_file(nonexistent_file)
         
         # Check default values
-        self.assertFalse(calibration.azimuth_inverted)
         self.assertEqual(calibration.azimuth_offset, 0.0)
-        self.assertTrue(calibration.elevation_inverted)
         self.assertEqual(calibration.elevation_offset, 0.0)
+        self.assertEqual(calibration.min_azimuth, 0.0)
+        self.assertEqual(calibration.max_azimuth, 360.0)
+        self.assertEqual(calibration.min_elevation, 0.0)
+        self.assertEqual(calibration.max_elevation, 90.0)
 
     def test_invalid_json_file(self):
         """Test wczytywania nieprawidłowego pliku JSON"""
@@ -80,17 +90,22 @@ class TestCalibrationPersistence(unittest.TestCase):
     def test_export_import_dict(self):
         """Test eksportu/importu do/z słownika"""
         original = PositionCalibration(
-            azimuth_inverted=True,
             azimuth_offset=30.0,
-            elevation_inverted=False,
-            elevation_offset=5.5
+            elevation_offset=5.5,
+            min_azimuth=0.0,
+            max_azimuth=360.0,
+            min_elevation=0.0,
+            max_elevation=90.0,
+            max_azimuth_speed=10.0,
+            max_elevation_speed=8.0
         )
 
         # Export do słownika
         data_dict = original.export_to_dict()
         
         # Sprawdź czy słownik zawiera wszystkie pola
-        expected_keys = ['azimuth_inverted', 'azimuth_offset', 'elevation_inverted', 'elevation_offset']
+        expected_keys = ['azimuth_offset', 'elevation_offset', 'min_azimuth', 'max_azimuth', 
+                         'min_elevation', 'max_elevation', 'max_azimuth_speed', 'max_elevation_speed']
         for key in expected_keys:
             self.assertIn(key, data_dict)
 
@@ -98,18 +113,24 @@ class TestCalibrationPersistence(unittest.TestCase):
         imported = PositionCalibration.import_from_dict(data_dict)
 
         # Sprawdź czy wartości są identyczne
-        self.assertEqual(original.azimuth_inverted, imported.azimuth_inverted)
         self.assertAlmostEqual(original.azimuth_offset, imported.azimuth_offset, places=1)
-        self.assertEqual(original.elevation_inverted, imported.elevation_inverted)
         self.assertAlmostEqual(original.elevation_offset, imported.elevation_offset, places=1)
+        self.assertAlmostEqual(original.min_azimuth, imported.min_azimuth, places=1)
+        self.assertAlmostEqual(original.max_azimuth, imported.max_azimuth, places=1)
+        self.assertAlmostEqual(original.min_elevation, imported.min_elevation, places=1)
+        self.assertAlmostEqual(original.max_elevation, imported.max_elevation, places=1)
 
     def test_json_file_format(self):
         """Test formatu pliku JSON"""
         calibration = PositionCalibration(
-            azimuth_inverted=True,
             azimuth_offset=60.0,
-            elevation_inverted=False,
-            elevation_offset=-5.0
+            elevation_offset=-5.0,
+            min_azimuth=0.0,
+            max_azimuth=360.0,
+            min_elevation=0.0,
+            max_elevation=90.0,
+            max_azimuth_speed=10.0,
+            max_elevation_speed=8.0
         )
 
         # Zapisz do pliku
@@ -120,19 +141,25 @@ class TestCalibrationPersistence(unittest.TestCase):
             data = json.load(f)
 
         # Sprawdź czy wszystkie wymagane pola są obecne
-        self.assertIn('azimuth_inverted', data)
         self.assertIn('azimuth_offset', data)
-        self.assertIn('elevation_inverted', data)
         self.assertIn('elevation_offset', data)
+        self.assertIn('min_azimuth', data)
+        self.assertIn('max_azimuth', data)
+        self.assertIn('min_elevation', data)
+        self.assertIn('max_elevation', data)
+        self.assertIn('max_azimuth_speed', data)
+        self.assertIn('max_elevation_speed', data)
         self.assertIn('created_at', data)
         self.assertIn('version', data)
 
         # Sprawdź wartości
-        self.assertEqual(data['azimuth_inverted'], True)
         self.assertEqual(data['azimuth_offset'], 60.0)
-        self.assertEqual(data['elevation_inverted'], False)
         self.assertEqual(data['elevation_offset'], -5.0)
-        self.assertEqual(data['version'], '1.0')
+        self.assertEqual(data['min_azimuth'], 0.0)
+        self.assertEqual(data['max_azimuth'], 360.0)
+        self.assertEqual(data['min_elevation'], 0.0)
+        self.assertEqual(data['max_elevation'], 90.0)
+        self.assertEqual(data['version'], '2.0')
 
 
 class TestAntennaControllerCalibration(unittest.TestCase):
@@ -160,9 +187,7 @@ class TestAntennaControllerCalibration(unittest.TestCase):
     def test_automatic_calibration_save_on_set(self):
         """Test automatycznego zapisywania kalibracji przy ustawianiu"""
         new_calibration = PositionCalibration(
-            azimuth_inverted=True,
             azimuth_offset=90.0,
-            elevation_inverted=False,
             elevation_offset=10.0
         )
 
@@ -174,58 +199,60 @@ class TestAntennaControllerCalibration(unittest.TestCase):
 
         # Wczytaj z pliku i sprawdź wartości
         loaded = PositionCalibration.load_from_file(self.test_file)
-        self.assertEqual(loaded.azimuth_inverted, True)
         self.assertAlmostEqual(loaded.azimuth_offset, 90.0, places=1)
-        self.assertEqual(loaded.elevation_inverted, False)
         self.assertAlmostEqual(loaded.elevation_offset, 10.0, places=1)
 
     def test_manual_save_load(self):
         """Test ręcznego zapisywania i wczytywania"""
-        # Zmień kalibrację
+        # Ustaw jakieś wartości przed zapisem
         self.controller.position_calibration.azimuth_offset = 45.0
-        self.controller.position_calibration.elevation_inverted = False
-
+        self.controller.position_calibration.elevation_offset = 10.0
+        
         # Zapisz ręcznie
         self.controller.save_calibration()
         self.assertTrue(os.path.exists(self.test_file))
 
         # Zmień kalibrację w pamięci
         self.controller.position_calibration.azimuth_offset = 0.0
-        self.controller.position_calibration.elevation_inverted = True
+        self.controller.position_calibration.elevation_offset = 0.0
 
         # Wczytaj z pliku
         self.controller.load_calibration()
 
         # Sprawdź czy wartości zostały przywrócone
         self.assertAlmostEqual(self.controller.position_calibration.azimuth_offset, 45.0, places=1)
-        self.assertEqual(self.controller.position_calibration.elevation_inverted, False)
+        self.assertAlmostEqual(self.controller.position_calibration.elevation_offset, 10.0, places=1)
 
     def test_reset_calibration(self):
         """Test resetowania kalibracji"""
         # Zmień kalibrację
         self.controller.position_calibration.azimuth_offset = 123.0
-        self.controller.position_calibration.azimuth_inverted = True
+        self.controller.position_calibration.elevation_offset = 45.0
 
         # Resetuj
         self.controller.reset_calibration(save_to_file=True)
 
         # Sprawdź czy wartości są domyślne
         self.assertAlmostEqual(self.controller.position_calibration.azimuth_offset, 0.0, places=1)
-        self.assertEqual(self.controller.position_calibration.azimuth_inverted, False)
+        self.assertAlmostEqual(self.controller.position_calibration.elevation_offset, 0.0, places=1)
 
         # Sprawdź czy zostało zapisane do pliku
         loaded = PositionCalibration.load_from_file(self.test_file)
         self.assertAlmostEqual(loaded.azimuth_offset, 0.0, places=1)
-        self.assertEqual(loaded.azimuth_inverted, False)
+        self.assertAlmostEqual(loaded.elevation_offset, 0.0, places=1)
 
     def test_status_includes_calibration(self):
         """Test czy status zawiera informacje o kalibracji"""
         # Ustaw testową kalibrację
         test_cal = PositionCalibration(
-            azimuth_inverted=True,
             azimuth_offset=30.0,
-            elevation_inverted=False,
-            elevation_offset=15.0
+            elevation_offset=15.0,
+            min_azimuth=0.0,
+            max_azimuth=360.0,
+            min_elevation=0.0,
+            max_elevation=90.0,
+            max_azimuth_speed=10.0,
+            max_elevation_speed=8.0
         )
         self.controller.set_position_calibration(test_cal, save_to_file=False)
 
@@ -237,9 +264,7 @@ class TestAntennaControllerCalibration(unittest.TestCase):
         self.assertIn('calibration_file', status)
 
         cal_info = status['calibration']
-        self.assertEqual(cal_info['azimuth_inverted'], True)
         self.assertAlmostEqual(cal_info['azimuth_offset'], 30.0, places=1)
-        self.assertEqual(cal_info['elevation_inverted'], False)
         self.assertAlmostEqual(cal_info['elevation_offset'], 15.0, places=1)
 
 
