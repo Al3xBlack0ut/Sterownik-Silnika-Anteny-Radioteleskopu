@@ -138,12 +138,10 @@ class AxisMoveModel(BaseModel):
     amount: float = Field(1.0, description="Wielkość ruchu w stopniach")
 
 class TrackingConfigModel(BaseModel):
-    """Model konfiguracji śledzenia"""
-    object_name: str = Field(..., description="Nazwa obiektu astronomicznego")
-    object_type: AstronomicalObjectType = Field(..., description="Typ obiektu")
-    min_elevation: float = Field(10.0, description="Minimalna elewacja w stopniach")
-    update_interval: float = Field(1.0, description="Interwał aktualizacji w sekundach")
-    precision: float = Field(0.5, description="Dokładność pozycjonowania w stopniach")
+    """Konfiguracja śledzenia astronomicznego"""
+    object_name: str = Field(..., description="Nazwa obiektu do śledzenia")
+    object_type: AstronomicalObjectType = Field(AstronomicalObjectType.SUN, description="Typ obiektu astronomicznego")
+    update_interval: float = Field(1.0, ge=0.1, le=300, description="Interwał aktualizacji pozycji w sekundach")
 
 # Pomocnicze funkcje
 def get_antenna_controller() -> AntennaController:
@@ -179,9 +177,9 @@ async def continuous_tracking_task(tracking_config: TrackingConfigModel):
         
         # Utwórz funkcję śledzenia dla określonego obiektu
         if tracking_config.object_name.lower() == "sun":
-            track_function = tracker.track_sun(min_elevation=tracking_config.min_elevation)
+            track_function = tracker.track_sun(min_elevation=0.0)
         elif tracking_config.object_name.lower() == "moon":
-            track_function = tracker.track_moon(min_elevation=tracking_config.min_elevation)
+            track_function = tracker.track_moon(min_elevation=0.0)
         else:
             # Dla innych obiektów używamy trackingu ogólnego
             raise HTTPException(status_code=400, detail=f"Obiekt '{tracking_config.object_name}' nie jest obsługiwany")
@@ -286,8 +284,7 @@ async def connect_antenna(config: ConnectionConfigModel):
             logger.info("Łączę z symulatorem...")
             antenna_controller = AntennaControllerFactory.create_simulator_controller(
                 simulation_speed=2000.0,
-                motor_config=MotorConfig(),
-                limits=AntennaLimits()
+                motor_config=MotorConfig()
             )
         else:
             port = config.port
@@ -301,8 +298,7 @@ async def connect_antenna(config: ConnectionConfigModel):
             antenna_controller = AntennaControllerFactory.create_spid_controller(
                 port=port,
                 baudrate=config.baudrate,
-                motor_config=MotorConfig(),
-                limits=AntennaLimits()
+                motor_config=MotorConfig()
             )
 
         # Inicjalizuj kontroler
@@ -697,9 +693,9 @@ async def move_axis(move: AxisMoveModel):
 
         elif move.axis.lower() == "elevation":
             if move.direction.lower() == "positive":
-                new_elevation = min(current_pos.elevation + move.amount, 90)
+                new_elevation = current_pos.elevation + move.amount
             else:  # negative
-                new_elevation = max(current_pos.elevation - move.amount, 0)
+                new_elevation = current_pos.elevation - move.amount
             new_position = Position(azimuth=current_pos.azimuth, elevation=new_elevation)
 
         else:

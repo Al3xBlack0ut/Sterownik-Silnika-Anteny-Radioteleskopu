@@ -432,7 +432,7 @@ class Position:
     """Pozycja anteny (azymut i elewacja)"""
 
     azimuth: float  # stopnie (0-360)
-    elevation: float  # stopnie (0-90)
+    elevation: float  # stopnie (bez ograniczeń, limity sprawdzane w AntennaController)
 
     def __post_init__(self):
         """Walidacja pozycji"""
@@ -440,10 +440,7 @@ class Position:
             raise ValueError(
                 f"Azymut musi być w zakresie 0-360°, otrzymano: {self.azimuth}"
             )
-        if not (0 <= self.elevation <= 90):
-            raise ValueError(
-                f"Elewacja musi być w zakresie 0-90°, otrzymano: {self.elevation}"
-            )
+        # Elewacja bez ograniczeń - limity sprawdzane w AntennaController
 
 
 @dataclass
@@ -481,8 +478,8 @@ class PositionCalibration:
         # Aplikuj offset elewacji
         calibrated_elevation = position.elevation + self.elevation_offset
 
-        # Ogranicz elewację do sensownego zakresu (0°-90°)
-        calibrated_elevation = max(0.0, min(90.0, calibrated_elevation))
+        # Ogranicz elewację do zakresów z kalibracji
+        calibrated_elevation = max(self.min_elevation, min(self.max_elevation, calibrated_elevation))
 
         return Position(calibrated_azimuth, calibrated_elevation)
 
@@ -659,9 +656,6 @@ class MotorConfig:
         # Normalizuj azymut do zakresu 0-360
         calibrated_azimuth = calibrated_azimuth % 360.0
 
-        # Ogranicz elewację do zakresu -90 do 90
-        calibrated_elevation = max(-90.0, min(90.0, calibrated_elevation))
-
         return calibrated_azimuth, calibrated_elevation
 
     def reverse_calibration(
@@ -768,10 +762,6 @@ class RotctlMotorDriver(MotorDriver):
         # Walidacja zakresu
         if not (0 <= azimuth <= 360):
             raise PositionError(f"Azymut poza zakresem: {azimuth}° (oczekiwano 0-360°)")
-        if not (-90 <= elevation <= 90):
-            raise PositionError(
-                f"Elewacja poza zakresem: {elevation}° (oczekiwano -90-90°)"
-            )
 
         try:
             self.target_azimuth = azimuth

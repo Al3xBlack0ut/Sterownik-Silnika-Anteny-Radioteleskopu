@@ -333,7 +333,6 @@ class AstronomicalTracker:
         object_type: AstronomicalObjectType,
         object_name: Optional[str] = None,
         star_coordinates: Optional[Tuple[float, float]] = None,
-        min_elevation: float = 10.0,
     ):
         """
         Tworzy funkcję pozycji do użycia z kontrolerem anteny
@@ -347,10 +346,7 @@ class AstronomicalTracker:
                 )
 
                 # Sprawdź widoczność
-                if (
-                    not ast_position.is_visible
-                    or ast_position.elevation < min_elevation
-                ):
+                if not ast_position.is_visible:
                     return None
 
                 # Konwertuj na pozycję anteny
@@ -365,26 +361,21 @@ class AstronomicalTracker:
 
     def track_sun(self, min_elevation: float = 10.0):
         """Zwraca funkcję śledzenia Słońca"""
-        return self.create_position_function(
-            AstronomicalObjectType.SUN, min_elevation=min_elevation
-        )
+        return self.create_position_function(AstronomicalObjectType.SUN)
 
     def track_moon(self, min_elevation: float = 10.0):
         """Zwraca funkcję śledzenia Księżyca"""
-        return self.create_position_function(
-            AstronomicalObjectType.MOON, min_elevation=min_elevation
-        )
+        return self.create_position_function(AstronomicalObjectType.MOON)
 
     def track_planet(self, planet: AstronomicalObjectType, min_elevation: float = 10.0):
         """Zwraca funkcję śledzenia planety"""
-        return self.create_position_function(planet, min_elevation=min_elevation)
+        return self.create_position_function(planet)
 
     def track_star(self, star_name: str, min_elevation: float = 10.0):
         """Zwraca funkcję śledzenia gwiazdy"""
         return self.create_position_function(
             AstronomicalObjectType.STAR,
             object_name=star_name,
-            min_elevation=min_elevation,
         )
 
     def track_coordinates(
@@ -394,7 +385,6 @@ class AstronomicalTracker:
         return self.create_position_function(
             AstronomicalObjectType.CUSTOM,
             star_coordinates=(ra_hours, dec_degrees),
-            min_elevation=min_elevation,
         )
 
 

@@ -20,11 +20,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from antenna_controller import (
     AntennaControllerFactory,
     Position,
-    MotorConfig,
-    AntennaLimits,
     AntennaState,
-    SafetyError,
-    DEFAULT_SPID_PORT,
+    SafetyError
 )
 
 from astronomic_calculator import (
