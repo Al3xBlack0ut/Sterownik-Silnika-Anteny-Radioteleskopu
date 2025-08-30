@@ -20,16 +20,19 @@ import asyncio
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from antenna_controller import (
-    AntennaControllerFactory, AntennaController, Position, AntennaError,
-    MotorConfig, AntennaLimits, get_best_spid_port,
-    AntennaState, PositionCalibration, DEFAULT_SPID_PORT
+    AntennaController, Position, AntennaError, AntennaState, PositionCalibration, 
+    DEFAULT_SPID_PORT, DEFAULT_BAUDRATE, sprawdz_rotctl,
+    AntennaControllerFactory, MotorConfig, get_best_spid_port
 )
 from astronomic_calculator import (
     AstronomicalCalculator, ObserverLocation, AstronomicalObjectType, AstronomicalTracker
 )
 
 # Konfiguracja logowania
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Globalne instancje
@@ -39,12 +42,13 @@ current_observer_location: Optional[ObserverLocation] = None
 astro_tracker: Optional[AstronomicalTracker] = None
 tracking_active: bool = False
 tracking_task: Optional[asyncio.Task] = None
+current_port: Optional[str] = None
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Lifecycle manager for FastAPI app"""
+    """Lifecycle manager dla aplikacji FastAPI"""
     # Startup
-    logger.info("Uruchamianie API radioteleskopa...")
+    logger.info("Uruchamianie API radioteleskopu...")
     yield
     # Shutdown
     global antenna_controller, tracking_active, tracking_task
@@ -115,6 +119,7 @@ class StatusResponse(BaseModel):
     is_moving: bool
     last_error: Optional[str]
     observer_location: Optional[ObserverLocationModel]
+    port: Optional[str] = Field(None, description="Aktualnie używany port szeregowy")
 
 class AstronomicalObjectModel(BaseModel):
     """Model obiektu astronomicznego"""
@@ -128,7 +133,9 @@ class CalibrationModel(BaseModel):
 
 class AzimuthCalibrationModel(BaseModel):
     """Model kalibracji azymutu"""
-    current_azimuth: Optional[float] = Field(None, description="Aktualna pozycja azymutu (jeśli None, użyje aktualnej)")
+    current_azimuth: Optional[float] = Field(
+        None, description="Aktualna pozycja azymutu (jeśli None, użyje aktualnej)"
+    )
     save_to_file: bool = Field(True, description="Czy zapisać kalibrację do pliku")
 
 class AxisMoveModel(BaseModel):
@@ -140,8 +147,12 @@ class AxisMoveModel(BaseModel):
 class TrackingConfigModel(BaseModel):
     """Konfiguracja śledzenia astronomicznego"""
     object_name: str = Field(..., description="Nazwa obiektu do śledzenia")
-    object_type: AstronomicalObjectType = Field(AstronomicalObjectType.SUN, description="Typ obiektu astronomicznego")
-    update_interval: float = Field(1.0, ge=0.1, le=300, description="Interwał aktualizacji pozycji w sekundach")
+    object_type: AstronomicalObjectType = Field(
+        AstronomicalObjectType.SUN, description="Typ obiektu astronomicznego"
+    )
+    update_interval: float = Field(
+        1.0, ge=0.1, le=300, description="Interwał aktualizacji pozycji w sekundach"
+    )
 
 # Pomocnicze funkcje
 def get_antenna_controller() -> AntennaController:
@@ -176,13 +187,40 @@ async def continuous_tracking_task(tracking_config: TrackingConfigModel):
         controller = get_antenna_controller()
         
         # Utwórz funkcję śledzenia dla określonego obiektu
-        if tracking_config.object_name.lower() == "sun":
-            track_function = tracker.track_sun(min_elevation=0.0)
-        elif tracking_config.object_name.lower() == "moon":
-            track_function = tracker.track_moon(min_elevation=0.0)
+        if tracking_config.object_type == AstronomicalObjectType.SUN:
+            track_function = tracker.track_sun()
+        elif tracking_config.object_type == AstronomicalObjectType.MOON:
+            track_function = tracker.track_moon()
+        elif tracking_config.object_type in [
+            AstronomicalObjectType.MERCURY,
+            AstronomicalObjectType.VENUS,
+            AstronomicalObjectType.MARS,
+            AstronomicalObjectType.JUPITER,
+            AstronomicalObjectType.SATURN,
+            AstronomicalObjectType.URANUS,
+            AstronomicalObjectType.NEPTUNE
+        ]:
+            # Planety
+            track_function = tracker.track_planet(tracking_config.object_type)
+        elif tracking_config.object_type == AstronomicalObjectType.STAR:
+            # Gwiazdy
+            track_function = tracker.track_star(tracking_config.object_name)
+        elif tracking_config.object_type == AstronomicalObjectType.CUSTOM:
+            # Obiekt niestandardowy - wymaga współrzędnych
+            raise HTTPException(status_code=400, detail="Śledzenie obiektów niestandardowych wymaga podania współrzędnych")
         else:
-            # Dla innych obiektów używamy trackingu ogólnego
-            raise HTTPException(status_code=400, detail=f"Obiekt '{tracking_config.object_name}' nie jest obsługiwany")
+            # Próba automatycznego rozpoznania typu na podstawie nazwy
+            object_name_lower = tracking_config.object_name.lower()
+            if object_name_lower == "sun":
+                track_function = tracker.track_sun()
+            elif object_name_lower == "moon":
+                track_function = tracker.track_moon()
+            elif object_name_lower in ["mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune"]:
+                planet_type = AstronomicalObjectType(object_name_lower)
+                track_function = tracker.track_planet(planet_type)
+            else:
+                # Domyślnie traktuj jako gwiazdę
+                track_function = tracker.track_star(tracking_config.object_name)
         
         while tracking_active:
             try:
@@ -271,13 +309,14 @@ async def get_status():
         current_position=current_position,
         is_moving=is_moving,
         last_error=last_error,
-        observer_location=observer_loc
+        observer_location=observer_loc,
+        port=current_port
     )
 
 @app.post("/connect", summary="Połącz z anteną")
 async def connect_antenna(config: ConnectionConfigModel):
     """Nawiąż połączenie z anteną"""
-    global antenna_controller
+    global antenna_controller, current_port
 
     try:
         if config.use_simulator:
@@ -286,6 +325,7 @@ async def connect_antenna(config: ConnectionConfigModel):
                 simulation_speed=2000.0,
                 motor_config=MotorConfig()
             )
+            current_port = "Symulator"
         else:
             port = config.port
             if not port:
@@ -300,12 +340,13 @@ async def connect_antenna(config: ConnectionConfigModel):
                 baudrate=config.baudrate,
                 motor_config=MotorConfig()
             )
+            current_port = port
 
         # Inicjalizuj kontroler
         antenna_controller.initialize()
 
         logger.info("Połączenie nawiązane pomyślnie")
-        return {"status": "connected", "port": config.port, "simulator": config.use_simulator}
+        return {"status": "connected", "port": current_port, "simulator": config.use_simulator}
 
     except Exception as e:
         logger.error(f"Błąd połączenia: {e}")
@@ -314,13 +355,14 @@ async def connect_antenna(config: ConnectionConfigModel):
 @app.post("/disconnect", summary="Rozłącz z anteną")
 async def disconnect_antenna():
     """Rozłącz z anteną"""
-    global antenna_controller
+    global antenna_controller, current_port
 
     try:
         if antenna_controller:
             antenna_controller.stop()
             antenna_controller.shutdown()
             antenna_controller = None
+            current_port = None
 
         logger.info("Rozłączono z anteną")
         return {"status": "disconnected"}
@@ -532,24 +574,19 @@ async def list_ports():
 async def diagnostic():
     """Sprawdź czy rotctl i SPID działają"""
     try:
-        import subprocess
+        from antenna_controller import test_spid_connection
 
         # Test rotctl
-        rotctl_result = subprocess.run(['rotctl', '--version'],
-                                       capture_output=True, text=True, timeout=5, check=False)
-        rotctl_available = rotctl_result.returncode == 0
+        rotctl_available = sprawdz_rotctl()
 
         # Test połączenia ze SPID
-        spid_result = subprocess.run(['rotctl', '-m', '903', '-r', DEFAULT_SPID_PORT,
-                                      '-s', '115200', '-t', '2', 'get_pos'],
-                                     capture_output=True, text=True, timeout=10, check=False)
-        spid_connected = spid_result.returncode == 0
+        spid_connected = test_spid_connection(DEFAULT_SPID_PORT, DEFAULT_BAUDRATE)
 
         return {
             "rotctl_available": rotctl_available,
-            "rotctl_version": rotctl_result.stdout.strip() if rotctl_available else "N/A",
+            "rotctl_version": "Available" if rotctl_available else "N/A",
             "spid_connected": spid_connected,
-            "spid_error": spid_result.stderr.strip() if not spid_connected else "OK",
+            "spid_error": "SPID not responding" if not spid_connected else "OK",
             "default_port": DEFAULT_SPID_PORT,
             "recommendation": ("Użyj symulatora jeśli SPID nie odpowiada"
                                if not spid_connected else "SPID ready")
@@ -586,9 +623,17 @@ async def get_astronomical_position(object_name: str):
         if not position.is_visible:
             logger.warning(f"Obiekt {object_name} jest pod horyzontem")
 
+        # Konwertuj do pozycji anteny (z właściwą konwersją elewacji)
+        antenna_position = position.to_antenna_position()
+        if antenna_position is None:
+            # Obiekt nie jest widoczny, ale zwróć surowe dane
+            converted_elevation = 90.0 - position.elevation if position.elevation >= 0 else position.elevation
+        else:
+            converted_elevation = antenna_position.elevation
+
         return {
             "azimuth": position.azimuth,
-            "elevation": position.elevation,
+            "elevation": converted_elevation,
             "distance": position.distance,
             "ra": position.ra,
             "dec": position.dec,

@@ -75,8 +75,9 @@ class AstronomicalPosition:
             return None
         rotctl_azimuth = self.azimuth
 
-        # Elewacja w systemie SPID: 90° = horyzont, 0° = zenit
-        # ale PyEphem zwraca standardową elewację (0° = horyzont, 90° = zenit)
+        # Elewacja w waszym systemie: 0° = pion (zenit), 90° = poziom (horyzont)
+        # PyEphem zwraca standardową elewację (0° = horyzont, 90° = zenit)
+        # Więc musimy odwrócić: 90° - elevation_pyephem
         rotctl_elevation = 90.0 - self.elevation
 
         return Position(azimuth=rotctl_azimuth, elevation=rotctl_elevation)
@@ -359,19 +360,19 @@ class AstronomicalTracker:
 
         return get_position
 
-    def track_sun(self, min_elevation: float = 10.0):
+    def track_sun(self):
         """Zwraca funkcję śledzenia Słońca"""
         return self.create_position_function(AstronomicalObjectType.SUN)
 
-    def track_moon(self, min_elevation: float = 10.0):
+    def track_moon(self):
         """Zwraca funkcję śledzenia Księżyca"""
         return self.create_position_function(AstronomicalObjectType.MOON)
 
-    def track_planet(self, planet: AstronomicalObjectType, min_elevation: float = 10.0):
+    def track_planet(self, planet: AstronomicalObjectType):
         """Zwraca funkcję śledzenia planety"""
         return self.create_position_function(planet)
 
-    def track_star(self, star_name: str, min_elevation: float = 10.0):
+    def track_star(self, star_name: str):
         """Zwraca funkcję śledzenia gwiazdy"""
         return self.create_position_function(
             AstronomicalObjectType.STAR,
@@ -379,8 +380,7 @@ class AstronomicalTracker:
         )
 
     def track_coordinates(
-        self, ra_hours: float, dec_degrees: float, min_elevation: float = 10.0
-    ):
+        self, ra_hours: float, dec_degrees: float):
         """Zwraca funkcję śledzenia współrzędnych"""
         return self.create_position_function(
             AstronomicalObjectType.CUSTOM,
@@ -391,7 +391,7 @@ class AstronomicalTracker:
 # Predefiniowane lokalizacje obserwatoriów
 OBSERVATORIES = {
     "poznan": ObserverLocation(
-        52.40030228321106, 16.955077591791788, 75, "Poznań Polanka"
+        52.40030228321106, 16.955077591791788, 60, "Poznań Polanka"
     )
 }
 
@@ -458,7 +458,7 @@ if __name__ == "__main__":
 
     # Test śledzenia Słońca
     print("Test funkcji śledzenia Słońca:")
-    sun_tracker = tracker.track_sun(min_elevation=0.0)
+    sun_tracker = tracker.track_sun()
     sun_position = sun_tracker()
 
     if sun_position:

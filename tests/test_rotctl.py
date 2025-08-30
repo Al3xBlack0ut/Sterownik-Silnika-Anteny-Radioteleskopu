@@ -18,7 +18,10 @@ import os
 # Dodaj ścieżkę do głównego folderu projektu
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from antenna_controller import PositionCalibration, DEFAULT_CALIBRATION_FILE
+from antenna_controller import (
+    PositionCalibration, DEFAULT_CALIBRATION_FILE, DEFAULT_SPID_PORT, DEFAULT_BAUDRATE,
+    sprawdz_rotctl
+)
 
 # Konfiguracja logowania
 logging.basicConfig(
@@ -27,10 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Domyślny port SPID
-DEFAULT_SPID_PORT = "/dev/tty.usbserial-A10PDNT7"
-
-def ustaw_pozycje(port: str, az: float, el: float, speed: int = 115200, apply_calibration: bool = True):
+def ustaw_pozycje(port: str, az: float, el: float, speed: int = DEFAULT_BAUDRATE, apply_calibration: bool = True):
     """Ustawia pozycję rotatora SPID MD-03 za pomocą rotctl (Hamlib)"""
     
     # Zastosuj offset kalibracji jeśli włączony
@@ -59,7 +59,7 @@ def ustaw_pozycje(port: str, az: float, el: float, speed: int = 115200, apply_ca
 
     return stdout.strip()
 
-def odczytaj_pozycje(port: str, speed: int = 115200, apply_calibration: bool = True):
+def odczytaj_pozycje(port: str, speed: int = DEFAULT_BAUDRATE, apply_calibration: bool = True):
     """
     Odczytuje aktualną pozycję rotatora SPID.
     Zwraca tuple (azymut, elewacja) w stopniach z uwzględnieniem offsetów kalibracji.
@@ -151,65 +151,88 @@ def zatrzymaj_rotor(port: str, speed: int = 115200):
 
     return stdout.strip()
 
-def sprawdz_rotctl():
-    """Sprawdza czy rotctl jest dostępne w systemie."""
-    try:
-        result = subprocess.run(['rotctl', '--version'],
-                              capture_output=True, text=True, timeout=5, check=False)
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-
 
 def sprawdz_pozycje(port: str, target_az: float, target_el: float, tolerance: float = 1.5,
-                   max_attempts: int = 10, wait_time: float = 2.0, speed: int = 115200):
+                   timeout: float = 90.0, speed: int = DEFAULT_BAUDRATE):
     """
-    Sprawdza czy rotor osiągnał zadaną pozycję z określoną tolerancją.
+    Sprawdza czy rotor osiągnął zadaną pozycję z określoną tolerancją.
+    Używa inteligentnego czekania sprawdzając pozycję co 0.5s zamiast stałego czekania.
+    Przedłuża timeout jeśli wykryje ruch anteny.
 
     Args:
         port: Port szeregowy
         target_az: Docelowy azymut w stopniach
         target_el: Docelowa elewacja w stopniach
         tolerance: Tolerancja w stopniach (domyślnie 1.5°)
-        max_attempts: Maksymalna liczba prób (domyślnie 10)
-        wait_time: Czas oczekiwania między próbami w sekundach
+        timeout: Maksymalny czas oczekiwania w sekundach (domyślnie 90s)
         speed: Prędkość portu
 
     Returns:
-        tuple: (success: bool, final_az: float, final_el: float, attempts: int)
+        tuple: (success: bool, final_az: float, final_el: float, elapsed_time: float)
     """
-    for attempt in range(max_attempts):
+    start_time = time.time()
+    last_movement_time = start_time
+    attempt = 0
+    prev_az, prev_el = None, None
+    
+    while True:
+        attempt += 1
+        current_time = time.time()
+        elapsed_time = current_time - start_time
+        
         try:
             current_az, current_el = odczytaj_pozycje(port, speed)
 
-            # Oblicz różnicę, uwzględniając przejście przez 0°/360° dla azymutu
+            # Sprawdź czy antena się porusza (porównaj z poprzednią pozycją)
+            if prev_az is not None and prev_el is not None:
+                az_moved = abs(current_az - prev_az)
+                if az_moved > 180:  # Uwzględnij przejście przez 0°
+                    az_moved = 360 - az_moved
+                el_moved = abs(current_el - prev_el)
+                
+                # Jeśli antena się porusza (więcej niż 0.2°), zaktualizuj czas ostatniego ruchu
+                if az_moved > 0.2 or el_moved > 0.2:
+                    last_movement_time = current_time
+                    logger.debug(f"Wykryto ruch: dAz={az_moved:.1f}°, dEl={el_moved:.1f}°")
+
+            # Oblicz różnicę od pozycji docelowej
             az_diff = abs(current_az - target_az)
             if az_diff > 180:
                 az_diff = 360 - az_diff
-
             el_diff = abs(current_el - target_el)
 
-            logger.debug(f"Próba {attempt + 1}: Az={current_az:.1f}° (cel {target_az:.1f}°, diff {az_diff:.1f}°), "
-                        f"El={current_el:.1f}° (cel {target_el:.1f}°, diff {el_diff:.1f}°)")
+            logger.debug(f"Próba {attempt}: Az={current_az:.1f}° (cel {target_az:.1f}°, diff {az_diff:.1f}°), "
+                        f"El={current_el:.1f}° (cel {target_el:.1f}°, diff {el_diff:.1f}°), "
+                        f"elapsed={elapsed_time:.1f}s")
 
             # Sprawdź czy osiągnęliśmy pozycję z tolerancją
             if az_diff <= tolerance and el_diff <= tolerance:
-                return True, current_az, current_el, attempt + 1
+                return True, current_az, current_el, elapsed_time
 
+            # Sprawdź timeout - ale tylko jeśli antena nie porusza się przez ostatnie 10 sekund
+            time_since_movement = current_time - last_movement_time
+            if elapsed_time > timeout and time_since_movement > 10.0:
+                logger.warning(f"Timeout po {elapsed_time:.1f}s (brak ruchu przez {time_since_movement:.1f}s)")
+                break
+
+            # Zapisz pozycję dla następnej iteracji
+            prev_az, prev_el = current_az, current_el
+            
             # Czekaj przed następną próbą
-            if attempt < max_attempts - 1:
-                time.sleep(wait_time)
+            time.sleep(0.5)
 
         except Exception as e:
-            logger.warning(f"Błąd podczas sprawdzania pozycji (próba {attempt + 1}): {e}")
-            time.sleep(wait_time)
+            logger.warning(f"Błąd podczas sprawdzania pozycji (próba {attempt}): {e}")
+            time.sleep(0.5)
 
     # Ostatni odczyt dla zwrócenia aktualnej pozycji
     try:
         final_az, final_el = odczytaj_pozycje(port, speed)
-        return False, final_az, final_el, max_attempts
+        elapsed_time = time.time() - start_time
+        return False, final_az, final_el, elapsed_time
     except Exception:
-        return False, 0.0, 0.0, max_attempts
+        elapsed_time = time.time() - start_time
+        return False, 0.0, 0.0, elapsed_time
 
 
 def wczytaj_kalibracje(calibration_file=None):
@@ -239,7 +262,7 @@ class SPIDProtocolTests(unittest.TestCase):
     """Testy protokołu komunikacji SPID z użyciem Hamlib"""
 
     PORT = DEFAULT_SPID_PORT
-    BAUDRATE = 115200
+    BAUDRATE = DEFAULT_BAUDRATE
 
     @classmethod
     def setUpClass(cls):
@@ -325,11 +348,11 @@ class SPIDProtocolTests(unittest.TestCase):
             logger.info(f"Komenda MOVE do ({target_az}°, {target_el}°) wysłana")
 
             # Sprawdź czy pozycja została osiągnięta
-            success, final_az, final_el, attempts = sprawdz_pozycje(
-                self.PORT, target_az, target_el, tolerance=2.0, max_attempts=8, wait_time=2.5
+            success, final_az, final_el, elapsed_time = sprawdz_pozycje(
+                self.PORT, target_az, target_el, tolerance=2.0, timeout=20.0
             )
 
-            logger.info(f"Pozycja końcowa: Az={final_az:.1f}°, El={final_el:.1f}° (próby: {attempts})")
+            logger.info(f"Pozycja końcowa: Az={final_az:.1f}°, El={final_el:.1f}° (czas: {elapsed_time:.1f}s)")
 
             # Test zakończony sukcesem tylko jeśli osiągnięto pozycję
             if success:
@@ -362,11 +385,11 @@ class SPIDProtocolTests(unittest.TestCase):
             logger.info(f"Komenda MOVE do Az={target_az:.1f}°, El={target_el:.1f}° wysłana")
 
             # Sprawdź czy pozycja została osiągnięta
-            success, final_az, final_el, attempts = sprawdz_pozycje(
-                self.PORT, target_az, target_el, tolerance=1.5, max_attempts=6, wait_time=2.0
+            success, final_az, final_el, elapsed_time = sprawdz_pozycje(
+                self.PORT, target_az, target_el, tolerance=1.5, timeout=15.0
             )
 
-            logger.info(f"Pozycja końcowa: Az={final_az:.1f}°, El={final_el:.1f}° (próby: {attempts})")
+            logger.info(f"Pozycja końcowa: Az={final_az:.1f}°, El={final_el:.1f}° (czas: {elapsed_time:.1f}s)")
 
             # Test zakończony sukcesem tylko jeśli osiągnięto pozycję
             if success:
@@ -464,11 +487,11 @@ class SPIDProtocolTests(unittest.TestCase):
             logger.info(f"Komenda MOVE do Az={target_az:.1f}°, El={target_el:.1f}°")
 
             # 3. Sprawdź czy pozycja została osiągnięta
-            success, final_az, final_el, attempts = sprawdz_pozycje(
-                self.PORT, target_az, target_el, tolerance=2.0, max_attempts=6, wait_time=2.0
+            success, final_az, final_el, elapsed_time = sprawdz_pozycje(
+                self.PORT, target_az, target_el, tolerance=2.0, timeout=15.0
             )
 
-            logger.info(f"Status po ruchu: Az={final_az:.1f}°, El={final_el:.1f}° (próby: {attempts})")
+            logger.info(f"Status po ruchu: Az={final_az:.1f}°, El={final_el:.1f}° (czas: {elapsed_time:.1f}s)")
 
             # 4. Zatrzymaj
             zatrzymaj_rotor(self.PORT, self.BAUDRATE)

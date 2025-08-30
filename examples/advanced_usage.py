@@ -16,9 +16,9 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from antenna_controller import (
-    AntennaControllerFactory, Position, MotorConfig, AntennaLimits,
-    AntennaState, DEFAULT_SPID_PORT
+from antenna_controller import (MotorConfig,
+    Position, AntennaState, DEFAULT_SPID_PORT, DEFAULT_BAUDRATE,
+    AntennaControllerFactory
 )
 
 from astronomic_calculator import (
@@ -49,24 +49,14 @@ def track_sun_realtime():
     # Konfiguracja kontrolera anteny
     motor_config = MotorConfig(
         steps_per_revolution=200,
-        microsteps=16,
-        gear_ratio_azimuth=100.0,
-        gear_ratio_elevation=80.0
-    )
-
-    limits = AntennaLimits(
-        min_azimuth=0.0,
-        max_azimuth=360.0,
-        min_elevation=5.0,
-        max_elevation=85.0
+        microsteps=16
     )
 
     # Tworzenie kontrolera z protokołem SPID
     controller = AntennaControllerFactory.create_spid_controller(
         port=DEFAULT_SPID_PORT,  # Używa domyślnego portu SPID
-        baudrate=115200,
-        motor_config=motor_config,
-        limits=limits
+        baudrate=DEFAULT_BAUDRATE,
+        motor_config=motor_config
     )
 
     # Klasa pomocnicza do śledzenia

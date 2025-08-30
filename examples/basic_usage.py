@@ -14,9 +14,9 @@ from datetime import datetime
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from antenna_controller import (
-    AntennaControllerFactory, Position, MotorConfig, AntennaLimits,
-    AntennaState
+from antenna_controller import (MotorConfig, 
+    Position, DEFAULT_BAUDRATE,
+    AntennaLimits, AntennaControllerFactory, AntennaState
 )
 
 
@@ -31,9 +31,7 @@ def basic_antenna_control():
     # Konfiguracja systemu
     motor_config = MotorConfig(
         steps_per_revolution=200,
-        microsteps=16,
-        gear_ratio_azimuth=100.0,
-        gear_ratio_elevation=80.0
+        microsteps=16
     )
 
     limits = AntennaLimits(
@@ -46,7 +44,7 @@ def basic_antenna_control():
     # Tworzenie kontrolera anteny z protokołem SPID
     # Opcja 1: Automatyczne wykrywanie portu
     controller = AntennaControllerFactory.create_spid_controller(
-        baudrate=115200,
+        baudrate=DEFAULT_BAUDRATE,
         motor_config=motor_config,
         limits=limits
     )
@@ -66,11 +64,11 @@ def basic_antenna_control():
 
         # Lista pozycji do odwiedzenia
         positions = [
-            Position(45.0, 30.0),  # Północny-wschód, 30° nad horyzontem
-            Position(135.0, 45.0),  # Południowy-wschód, 45° nad horyzontem
-            Position(225.0, 60.0),  # Południowy-zachód, 60° nad horyzontem
-            Position(315.0, 30.0),  # Północny-zachód, 30° nad horyzontem
-            Position(0.0, 10.0)  # Północ, 10° nad horyzontem
+            Position(45.0, 30.0),  # Północny-wschód
+            Position(135.0, 45.0),  # Południowy-wschód
+            Position(225.0, 60.0),  # Południowy-zachód
+            Position(315.0, 30.0),  # Północny-zachód
+            Position(0.0, 10.0)  # Północ
         ]
 
         print(f"Rozpoczynam ruch przez {len(positions)} pozycji...")
@@ -202,7 +200,7 @@ def grid_sky_scan():
 
     # Parametry skanowania
     az_start, az_end, az_step = 0, 360, 30  # Co 30° w azymucie
-    el_start, el_end, el_step = 0, 30, 10  # Co 20° w elewacji
+    el_start, el_end, el_step = 0, 30, 10  # Co 10° w elewacji
 
     # Generowanie siatki pozycji
     scan_positions = []
